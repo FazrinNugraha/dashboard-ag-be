@@ -139,6 +139,23 @@ class GoogleSheetsRepository:
             logger.error(f"Failed to append project row: {e}")
             raise Exception("SHEETS_UNAVAILABLE")
 
+        # Tulis formula K-L-M (total_dibayar, sisa_piutang, status_bayar)
+        # persis di baris yang baru dibuat agar kolom tidak kosong.
+        try:
+            formulas = [[
+                f'=SUMIF(PEMBAYARAN!B:B; A{new_row_number}; PEMBAYARAN!D:D)',
+                f'=H{new_row_number} - K{new_row_number}',
+                f'=IF(L{new_row_number}<=0; "LUNAS"; "DP")',
+            ]]
+            await ws_proyek.update(
+                range_name=f'K{new_row_number}:M{new_row_number}',
+                values=formulas,
+                value_input_option='USER_ENTERED',
+            )
+            logger.info(f"Formula K-L-M ditulis di baris {new_row_number}")
+        except Exception as e:
+            logger.warning(f"Gagal menulis formula di baris {new_row_number}: {e}")
+
         if dp_payment:
             try:
                 ws_bayar = await sh.worksheet("PEMBAYARAN")
