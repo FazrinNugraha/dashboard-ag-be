@@ -10,6 +10,12 @@ class SheetsRepositoryProtocol(Protocol):
     async def read_all(self) -> tuple[List[Project], List[Payment], List[Expense]]:
         """Reads all tabs in a single batchGet if possible, returning parsed models."""
         pass
+    async def write_project_and_dp(self, project: Project, dp_payment: Payment | None):
+        pass
+    async def write_payment(self, payment: Payment):
+        pass
+    async def write_expense(self, expense: Expense):
+        pass
 
 class GoogleSheetsRepository:
     def __init__(self, agcm: gspread_asyncio.AsyncioGspreadClientManager, spreadsheet_id: str):
@@ -103,3 +109,64 @@ class GoogleSheetsRepository:
                     logger.warning(f"Skipping malformed expense row: {row}. Error: {e}")
 
         return projects, payments, expenses
+
+    async def write_project_and_dp(self, project: Project, dp_payment: Payment | None):
+        client = await self.agcm.authorize()
+        sh = await client.open_by_key(self.spreadsheet_id)
+        
+        ws_proyek = await sh.worksheet("PEMASUKAN_PROYEK")
+        requests = []
+        
+        proj_values = [
+            project.id_proyek, project.tanggal.isoformat(), project.nama_klien, 
+            project.alamat, project.pekerjaan, project.subtotal, project.diskon, 
+            project.nilai_proyek, project.bulan_filter, project.dibuat_oleh
+        ]
+        
+        requests.append({
+            "appendCells": {
+                "sheetId": ws_proyek.id,
+                "rows": [{"values": [{"userEnteredValue": {"stringValue": str(v)} if isinstance(v, str) else {"numberValue": v}} for v in proj_values]}],
+                "fields": "userEnteredValue"
+            }
+        })
+        
+        if dp_payment:
+            ws_bayar = await sh.worksheet("PEMBAYARAN")
+            pay_values = [
+                dp_payment.id_bayar, dp_payment.id_proyek, dp_payment.tanggal.isoformat(),
+                dp_payment.nominal, dp_payment.tipe, dp_payment.bulan_filter, dp_payment.dicatat_oleh
+            ]
+            requests.append({
+                "appendCells": {
+                    "sheetId": ws_bayar.id,
+                    "rows": [{"values": [{"userEnteredValue": {"stringValue": str(v)} if isinstance(v, str) else {"numberValue": v}} for v in pay_values]}],
+                    "fields": "userEnteredValue"
+                }
+            })
+            
+        try:
+            await sh.batch_update({"requests": requests})
+        except Exception as e:
+            logger.error(f"Failed to batch_update project and payment: {e}")
+            raise Exception("SHEETS_UNAVAILABLE")
+
+    async def write_payment(self, payment: Payment):
+        client = await self.agcm.authorize()
+        sh = await client.open_by_key(self.spreadsheet_id)
+        ws = await sh.worksheet("PEMBAYARAN")
+        pay_values = [
+            payment.id_bayar, payment.id_proyek, payment.tanggal.isoformat(),
+            payment.nominal, payment.tipe, payment.bulan_filter, payment.dicatat_oleh
+        ]
+        await ws.append_row(pay_values, value_input_option="RAW")
+
+    async def write_expense(self, expense: Expense):
+        client = await self.agcm.authorize()
+        sh = await client.open_by_key(self.spreadsheet_id)
+        ws = await sh.worksheet("PENGELUARAN")
+        exp_values = [
+            expense.id_pengeluaran, expense.tanggal.isoformat(), expense.kategori,
+            expense.keterangan, expense.nominal, expense.bulan_filter, expense.dibuat_oleh
+        ]
+        await ws.append_row(exp_values, value_input_option="RAW")
