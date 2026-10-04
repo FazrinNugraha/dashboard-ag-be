@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     GOOGLE_SERVICE_ACCOUNT_FILE: str = ""
     SPREADSHEET_ID: str = ""
     SPREADSHEET_URL: str = ""
+    GEMINI_API_KEY: str = ""
 
     @property
     def cors_origins(self) -> list[str]:
