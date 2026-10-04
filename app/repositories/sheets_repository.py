@@ -113,43 +113,47 @@ class GoogleSheetsRepository:
     async def write_project_and_dp(self, project: Project, dp_payment: Payment | None):
         client = await self.agcm.authorize()
         sh = await client.open_by_key(self.spreadsheet_id)
-        
+
         ws_proyek = await sh.worksheet("PEMASUKAN_PROYEK")
-        requests = []
-        
+
+        # Hitung baris log: baris baru = setelah baris data terakhir yang terisi
+        rows_before = await ws_proyek.get_values("A2:A")
+        filled_count = len([r for r in rows_before if r and r[0]])
+        new_row_number = 2 + filled_count  # A2 adalah data pertama
+
         proj_values = [
-            project.id_proyek, project.tanggal.isoformat(), project.nama_klien, 
-            project.alamat, project.pekerjaan, project.subtotal, project.diskon, 
+            project.id_proyek, project.tanggal.isoformat(), project.nama_klien,
+            project.alamat, project.pekerjaan, project.subtotal, project.diskon,
             project.nilai_proyek, project.bulan_filter, project.dibuat_oleh
         ]
-        
-        requests.append({
-            "appendCells": {
-                "sheetId": ws_proyek.id,
-                "rows": [{"values": [{"userEnteredValue": {"stringValue": str(v)} if isinstance(v, str) else {"numberValue": v}} for v in proj_values]}],
-                "fields": "userEnteredValue"
-            }
-        })
-        
-        if dp_payment:
-            ws_bayar = await sh.worksheet("PEMBAYARAN")
-            pay_values = [
-                dp_payment.id_bayar, dp_payment.id_proyek, dp_payment.tanggal.isoformat(),
-                dp_payment.nominal, dp_payment.tipe, dp_payment.bulan_filter, dp_payment.dicatat_oleh
-            ]
-            requests.append({
-                "appendCells": {
-                    "sheetId": ws_bayar.id,
-                    "rows": [{"values": [{"userEnteredValue": {"stringValue": str(v)} if isinstance(v, str) else {"numberValue": v}} for v in pay_values]}],
-                    "fields": "userEnteredValue"
-                }
-            })
-            
+
+        # append_row menulis persis setelah baris data terakhir yang terisi
+        # (Google Sheets versi async menambahkan baris grid bila perlu).
         try:
-            await sh.batch_update({"requests": requests})
+            await ws_proyek.append_row(
+                [str(v) if isinstance(v, str) else v for v in proj_values],
+                value_input_option="RAW",
+            )
+            logger.info(f"Proyek {project.id_proyek} ditulis di baris {new_row_number} PEMASUKAN_PROYEK")
         except Exception as e:
-            logger.error(f"Failed to batch_update project and payment: {e}")
+            logger.error(f"Failed to append project row: {e}")
             raise Exception("SHEETS_UNAVAILABLE")
+
+        if dp_payment:
+            try:
+                ws_bayar = await sh.worksheet("PEMBAYARAN")
+                pay_values = [
+                    dp_payment.id_bayar, dp_payment.id_proyek, dp_payment.tanggal.isoformat(),
+                    dp_payment.nominal, dp_payment.tipe, dp_payment.bulan_filter, dp_payment.dicatat_oleh
+                ]
+                await ws_bayar.append_row(
+                    [str(v) if isinstance(v, str) else v for v in pay_values],
+                    value_input_option="RAW",
+                )
+                logger.info(f"Pembayaran {dp_payment.id_bayar} ditulis di PEMBAYARAN")
+            except Exception as e:
+                logger.error(f"Failed to append payment row: {e}")
+                raise Exception("SHEETS_UNAVAILABLE")
 
     async def write_payment(self, payment: Payment):
         client = await self.agcm.authorize()
