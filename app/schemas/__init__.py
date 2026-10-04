@@ -1,0 +1,1 @@
+"""Skema Pydantic (request/response)."""
