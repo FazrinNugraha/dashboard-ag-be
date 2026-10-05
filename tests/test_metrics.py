@@ -136,7 +136,7 @@ class TestComputeReceivables:
 class TestTrend:
     def test_enam_bulan_kalender_berurutan(self):
         projects = [project("INV-1", 3_000_000, "2026-10")]
-        trend = get_trend(projects, "2026-10", 6)
+        trend = get_trend(projects, [], [], "2026-10", 6)
         assert [t["month"] for t in trend] == [
             "2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10",
         ]
@@ -144,15 +144,28 @@ class TestTrend:
         assert trend[-1]["omzet"] == 3_000_000
         assert trend[0]["omzet"] == 0
 
+    def test_laba_bersih_per_bulan(self):
+        projects = [project("INV-1", 5_000_000, "2026-10")]
+        payments = [payment("PAY-1", "INV-1", 4_000_000, "2026-10")]
+        expenses = [expense(1_500_000, "2026-10")]
+        trend = get_trend(projects, payments, expenses, "2026-10", 6)
+        titik = trend[-1]
+        assert titik["omzet"] == 5_000_000
+        assert titik["kas_masuk"] == 4_000_000
+        assert titik["pengeluaran"] == 1_500_000
+        assert titik["laba_bersih"] == 2_500_000
+        # bulan tanpa data
+        assert trend[0]["laba_bersih"] == 0
+
     def test_lintas_tahun(self):
-        trend = get_trend([], "2026-02", 6)
+        trend = get_trend([], [], [], "2026-02", 6)
         assert [t["month"] for t in trend] == [
             "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02",
         ]
 
     def test_bulan_malformed_mengembalikan_kosong(self):
-        assert get_trend([], "tidak-valid", 6) == []
-        assert get_trend([], "2026-13", 6) == []
+        assert get_trend([], [], [], "tidak-valid", 6) == []
+        assert get_trend([], [], [], "2026-13", 6) == []
 
 
 class TestExpenseBreakdown:

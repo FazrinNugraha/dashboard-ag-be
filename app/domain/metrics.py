@@ -100,11 +100,18 @@ def _month_range(end_month: str, count: int) -> List[str]:
 
 def get_trend(
     projects: List[Project],
+    payments: List[Payment],
+    expenses: List[Expense],
     current_month: str,
     months_count: int = 6,
 ) -> List[Dict[str, Any]]:
-    """Tren omzet untuk `months_count` bulan kalender terakhir (termasuk bulan
-    berjalan). Bulan tanpa data diisi 0 agar jumlah titik grafik konsisten."""
+    """Tren `months_count` bulan kalender terakhir (termasuk bulan berjalan).
+
+    Setiap titik berisi omzet, kas_masuk, pengeluaran, dan laba_bersih
+    (kas_masuk - pengeluaran, basis kas). Bulan tanpa data diisi 0 agar jumlah
+    titik grafik konsisten. Semua dihitung dari data yang sudah dimuat sehingga
+    pemanggil tidak perlu request per bulan.
+    """
     months = _month_range(current_month, months_count)
     if not months:
         return []
@@ -113,7 +120,28 @@ def get_trend(
     for p in projects:
         omzet_by_month[p.bulan_filter] += p.nilai_proyek
 
-    return [{"month": m, "omzet": omzet_by_month.get(m, 0)} for m in months]
+    kas_by_month: Dict[str, int] = defaultdict(int)
+    for p in payments:
+        kas_by_month[p.bulan_filter] += p.nominal
+
+    pengeluaran_by_month: Dict[str, int] = defaultdict(int)
+    for e in expenses:
+        pengeluaran_by_month[e.bulan_filter] += e.nominal
+
+    trend: List[Dict[str, Any]] = []
+    for m in months:
+        kas_masuk = kas_by_month.get(m, 0)
+        pengeluaran = pengeluaran_by_month.get(m, 0)
+        trend.append(
+            {
+                "month": m,
+                "omzet": omzet_by_month.get(m, 0),
+                "kas_masuk": kas_masuk,
+                "pengeluaran": pengeluaran,
+                "laba_bersih": kas_masuk - pengeluaran,
+            }
+        )
+    return trend
 
 
 def get_expense_breakdown(expenses: List[Expense], month: str) -> List[Dict[str, Any]]:

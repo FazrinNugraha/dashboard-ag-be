@@ -37,12 +37,22 @@ class DashboardService:
                 kpi_current[key]["prev"] = prev_val
                 kpi_current[key]["delta"] = delta
                 kpi_current[key]["delta_pct"] = delta_pct
+
+            # Laba bersih: prev/delta, margin dipertahankan
+            curr_laba = kpi_current["laba_bersih"]["value"]
+            prev_laba = kpi_prev["laba_bersih"]["value"]
+            laba_delta = curr_laba - prev_laba
+            kpi_current["laba_bersih"]["prev"] = prev_laba
+            kpi_current["laba_bersih"]["delta"] = laba_delta
+            kpi_current["laba_bersih"]["delta_pct"] = (
+                round((laba_delta / prev_laba * 100), 1) if prev_laba > 0 else None
+            )
                 
         except Exception:
             # If prev month logic fails (e.g. malformed string), ignore deltas
             pass
             
-        trend = get_trend(projects, month)
+        trend = get_trend(projects, payments, expenses, month)
         expense_breakdown = get_expense_breakdown(expenses, month)
         
         return {
