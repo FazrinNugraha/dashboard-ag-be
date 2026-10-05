@@ -3,9 +3,22 @@ import gspread_asyncio
 import gspread
 import logging
 from app.core.errors import AppError
+from app.core.retry import call_with_retry
 from app.schemas.domain import Project, Payment, Expense
 
 logger = logging.getLogger(__name__)
+
+# Penulisan tidak idempotent: hanya retry status yang pasti belum diproses.
+WRITE_RETRY_STATUSES = {429, 503}
+
+
+def _write_with_retry(factory):
+    return call_with_retry(
+        factory,
+        retry_statuses=WRITE_RETRY_STATUSES,
+        retry_network=False,
+    )
+
 
 # Formula kolom turunan K-L-M. Memakai ROW()/INDIRECT() agar tidak perlu tahu
 # nomor baris saat append (appendCells atomic, tidak membaca kolom).
@@ -113,7 +126,7 @@ class GoogleSheetsRepository:
         ranges = ["PEMASUKAN_PROYEK!A2:M", "PEMBAYARAN!A2:G", "PENGELUARAN!A2:G"]
         
         try:
-            values = await sh.values_batch_get(ranges)
+            values = await call_with_retry(lambda: sh.values_batch_get(ranges))
         except Exception as e:
             logger.error(f"Failed to read from Google Sheets: {e}")
             raise AppError("SHEETS_UNAVAILABLE", "Google Sheets tidak dapat dijangkau.", 503)
@@ -222,7 +235,7 @@ class GoogleSheetsRepository:
             )
 
         try:
-            await sh.batch_update({"requests": requests})
+            await _write_with_retry(lambda: sh.batch_update({"requests": requests}))
             logger.info(
                 "Proyek %s + %s ditulis atomic via appendCells",
                 project.id_proyek,
@@ -239,18 +252,20 @@ class GoogleSheetsRepository:
         sh = await client.open_by_key(self.spreadsheet_id)
         ws = await sh.worksheet("PEMBAYARAN")
         try:
-            await sh.batch_update(
-                {
-                    "requests": [
-                        {
-                            "appendCells": {
-                                "sheetId": ws.id,
-                                "fields": "*",
-                                "rows": [{"values": _payment_row(payment)}],
+            await _write_with_retry(
+                lambda: sh.batch_update(
+                    {
+                        "requests": [
+                            {
+                                "appendCells": {
+                                    "sheetId": ws.id,
+                                    "fields": "*",
+                                    "rows": [{"values": _payment_row(payment)}],
+                                }
                             }
-                        }
-                    ]
-                }
+                        ]
+                    }
+                )
             )
             logger.info("Pembayaran %s ditulis via appendCells", payment.id_bayar)
         except Exception as e:
@@ -262,18 +277,20 @@ class GoogleSheetsRepository:
         sh = await client.open_by_key(self.spreadsheet_id)
         ws = await sh.worksheet("PENGELUARAN")
         try:
-            await sh.batch_update(
-                {
-                    "requests": [
-                        {
-                            "appendCells": {
-                                "sheetId": ws.id,
-                                "fields": "*",
-                                "rows": [{"values": _expense_row(expense)}],
+            await _write_with_retry(
+                lambda: sh.batch_update(
+                    {
+                        "requests": [
+                            {
+                                "appendCells": {
+                                    "sheetId": ws.id,
+                                    "fields": "*",
+                                    "rows": [{"values": _expense_row(expense)}],
+                                }
                             }
-                        }
-                    ]
-                }
+                        ]
+                    }
+                )
             )
             logger.info("Pengeluaran %s ditulis via appendCells", expense.id_pengeluaran)
         except Exception as e:

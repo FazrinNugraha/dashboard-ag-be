@@ -31,8 +31,8 @@ def test_extract_terlalu_besar_ditolak(auth_client):
 
 def test_extract_pdf_rusak_ditolak(auth_client):
     response = _upload(auth_client, b"%PDF-1.4 rusak total")
-    assert response.status_code in (415, 422)
-    assert response.json()["error"]["code"] in {"PDF_INVALID", "PDF_NO_TEXT"}
+    assert response.status_code == 415
+    assert response.json()["error"]["code"] == "PDF_INVALID"
 
 
 def test_extract_tanpa_header_csrf_ditolak(auth_client):

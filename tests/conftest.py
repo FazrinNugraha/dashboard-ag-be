@@ -24,6 +24,7 @@ os.environ.update(
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.core.idempotency import idempotency_store  # noqa: E402
 from app.core.rate_limit import login_limiter  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -34,8 +35,10 @@ CSRF = {"X-Requested-With": "test"}
 @pytest.fixture(autouse=True)
 def _reset_limiter():
     login_limiter.clear()
+    idempotency_store.clear()
     yield
     login_limiter.clear()
+    idempotency_store.clear()
 
 
 @pytest.fixture

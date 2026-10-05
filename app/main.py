@@ -8,6 +8,7 @@ from app import __version__
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.errors import register_error_handlers
+from app.core.idempotency import IdempotencyMiddleware
 
 logger = logging.getLogger("app.request")
 
@@ -28,12 +29,16 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
 
+    # Urutan add_middleware: yang ditambahkan terakhir paling luar. CORS harus
+    # paling luar agar respons replay idempotency tetap mendapat header CORS.
+    app.add_middleware(IdempotencyMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-Requested-With", "Idempotency-Key"],
+        expose_headers=["Idempotency-Replayed"],
     )
 
     @app.middleware("http")
