@@ -1,11 +1,12 @@
 import asyncio
-from datetime import datetime, date
-from collections import defaultdict
+from datetime import date
 from app.core.errors import AppError
 from app.domain.snapshot import SnapshotCache
 from app.repositories.sheets_repository import GoogleSheetsRepository
 from app.schemas.project import ProjectCreateRequest, PaymentCreateRequest
 from app.schemas.domain import Project, Payment
+from app.services.ids import next_sequential_id
+
 
 class ProjectService:
     def __init__(
@@ -20,7 +21,8 @@ class ProjectService:
 
     async def create_project(self, request: ProjectCreateRequest, username: str) -> dict:
         async with self.write_lock:
-            # Re-read cache to ensure latest data
+            # Pastikan snapshot segar: cegah validasi memakai data basi (duplikat/ID).
+            await self.cache.force_refresh()
             projects, payments, _ = await self.cache.get_data()
             
             # 1. Cek duplikat id_proyek (BR-06)
@@ -53,21 +55,9 @@ class ProjectService:
             # Create DP Payment if dp > 0
             dp_payment = None
             if request.dp > 0:
-                # Generate id_bayar (PAY-YYMM-NNN)
+                # Generate id_bayar (PAY-YYMM-NNN) yang dijamin belum terpakai
                 prefix = f"PAY-{request.tanggal.strftime('%y%m')}-"
-                
-                # Find latest NNN for this month
-                max_nnn = 0
-                for p in payments:
-                    if p.id_bayar.startswith(prefix):
-                        try:
-                            nnn = int(p.id_bayar.split("-")[-1])
-                            if nnn > max_nnn:
-                                max_nnn = nnn
-                        except ValueError:
-                            pass
-                
-                new_id_bayar = f"{prefix}{max_nnn + 1:03d}"
+                new_id_bayar = next_sequential_id(prefix, {p.id_bayar for p in payments})
                 
                 tipe = "PELUNASAN" if request.dp == nilai_proyek else "DP"
                 
@@ -84,8 +74,8 @@ class ProjectService:
             # Write to Sheets (Atomic batch_update)
             await self.repository.write_project_and_dp(project, dp_payment)
             
-            # Refresh Cache Synchronously so read-your-writes works
-            await self.cache.force_refresh()
+            # Update cache inkremental (read-your-writes) tanpa baca ulang Sheets
+            await self.cache.append_project(project, dp_payment)
             
             return {
                 "proyek": project.model_dump(),
@@ -94,6 +84,8 @@ class ProjectService:
 
     async def add_payment(self, id_proyek: str, request: PaymentCreateRequest, username: str) -> dict:
         async with self.write_lock:
+            # Pastikan snapshot segar agar sisa piutang & ID tidak dihitung dari data basi.
+            await self.cache.force_refresh()
             projects, payments, _ = await self.cache.get_data()
             
             # Find project
@@ -121,20 +113,10 @@ class ProjectService:
                 
             tipe = "PELUNASAN" if request.nominal == sisa else "CICILAN"
             
-            # Generate id_bayar
+            # Generate id_bayar yang dijamin belum terpakai
             today = date.today()
             prefix = f"PAY-{today.strftime('%y%m')}-"
-            max_nnn = 0
-            for p in payments:
-                if p.id_bayar.startswith(prefix):
-                    try:
-                        nnn = int(p.id_bayar.split("-")[-1])
-                        if nnn > max_nnn:
-                            max_nnn = nnn
-                    except ValueError:
-                        pass
-            
-            new_id_bayar = f"{prefix}{max_nnn + 1:03d}"
+            new_id_bayar = next_sequential_id(prefix, {p.id_bayar for p in payments})
             bulan_filter = today.strftime("%Y-%m")
             
             payment = Payment(
@@ -149,7 +131,7 @@ class ProjectService:
             
             await self.repository.write_payment(payment)
             
-            # Refresh cache
-            await self.cache.force_refresh()
+            # Update cache inkremental (read-your-writes)
+            await self.cache.append_payment(payment)
             
             return {"pembayaran": payment.model_dump()}

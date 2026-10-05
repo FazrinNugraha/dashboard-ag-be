@@ -2,9 +2,75 @@ from typing import Protocol, List, Dict
 import gspread_asyncio
 import gspread
 import logging
+from app.core.errors import AppError
 from app.schemas.domain import Project, Payment, Expense
 
 logger = logging.getLogger(__name__)
+
+# Formula kolom turunan K-L-M. Memakai ROW()/INDIRECT() agar tidak perlu tahu
+# nomor baris saat append (appendCells atomic, tidak membaca kolom).
+# Pemisah argumen ";" sesuai locale spreadsheet (id_ID -> ;).
+_PROJECT_FORMULAS = (
+    '=SUMIF(PEMBAYARAN!$B:$B;INDIRECT("A"&ROW());PEMBAYARAN!$D:$D)',
+    '=INDIRECT("H"&ROW())-INDIRECT("K"&ROW())',
+    '=IF(INDIRECT("L"&ROW())<=0;"LUNAS";"DP")',
+)
+
+
+def _cell(value):
+    """Bentuk satu sel untuk batchUpdate (StringValue / NumberValue)."""
+    if isinstance(value, bool):
+        return {"userEnteredValue": {"boolValue": value}}
+    if isinstance(value, (int, float)):
+        return {"userEnteredValue": {"numberValue": value}}
+    return {"userEnteredValue": {"stringValue": str(value)}}
+
+
+def _formula(formula: str):
+    return {"userEnteredValue": {"formulaValue": formula}}
+
+
+def _project_row(project: Project) -> list:
+    return [
+        _cell(project.id_proyek),
+        _cell(project.tanggal.isoformat()),
+        _cell(project.nama_klien),
+        _cell(project.alamat),
+        _cell(project.pekerjaan),
+        _cell(project.subtotal),
+        _cell(project.diskon),
+        _cell(project.nilai_proyek),
+        _cell(project.bulan_filter),
+        _cell(project.dibuat_oleh),
+        _formula(_PROJECT_FORMULAS[0]),
+        _formula(_PROJECT_FORMULAS[1]),
+        _formula(_PROJECT_FORMULAS[2]),
+    ]
+
+
+def _payment_row(payment: Payment) -> list:
+    return [
+        _cell(payment.id_bayar),
+        _cell(payment.id_proyek),
+        _cell(payment.tanggal.isoformat()),
+        _cell(payment.nominal),
+        _cell(payment.tipe),
+        _cell(payment.bulan_filter),
+        _cell(payment.dicatat_oleh),
+    ]
+
+
+def _expense_row(expense: Expense) -> list:
+    return [
+        _cell(expense.id_pengeluaran),
+        _cell(expense.tanggal.isoformat()),
+        _cell(expense.kategori),
+        _cell(expense.keterangan),
+        _cell(expense.nominal),
+        _cell(expense.bulan_filter),
+        _cell(expense.dibuat_oleh),
+    ]
+
 
 def parse_int(v) -> int:
     """Parse angka dari Sheets, mis. '8.000.000', 'Rp 8.000.000', 8000000."""
@@ -50,7 +116,7 @@ class GoogleSheetsRepository:
             values = await sh.values_batch_get(ranges)
         except Exception as e:
             logger.error(f"Failed to read from Google Sheets: {e}")
-            raise Exception("SHEETS_UNAVAILABLE")
+            raise AppError("SHEETS_UNAVAILABLE", "Google Sheets tidak dapat dijangkau.", 503)
 
         projects = []
         payments = []
@@ -123,118 +189,93 @@ class GoogleSheetsRepository:
         return projects, payments, expenses
 
     async def write_project_and_dp(self, project: Project, dp_payment: Payment | None):
+        """Tulis proyek + DP dalam satu batchUpdate atomic (all-or-nothing).
+
+        Memakai appendCells sehingga Google yang menentukan baris berikutnya
+        (aman terhadap baris kosong, tanpa membaca kolom). Formula K-L-M
+        disertakan pada baris yang sama via ROW()/INDIRECT().
+        """
         client = await self.agcm.authorize()
         sh = await client.open_by_key(self.spreadsheet_id)
 
         ws_proyek = await sh.worksheet("PEMASUKAN_PROYEK")
-
-        # Hitung baris log: baris baru = setelah baris data terakhir yang terisi
-        rows_before = await ws_proyek.get_values("A2:A")
-        filled_count = len([r for r in rows_before if r and r[0]])
-        new_row_number = 2 + filled_count  # A2 adalah data pertama
-
-        proj_values = [
-            project.id_proyek, project.tanggal.isoformat(), project.nama_klien,
-            project.alamat, project.pekerjaan, project.subtotal, project.diskon,
-            project.nilai_proyek, project.bulan_filter, project.dibuat_oleh
+        requests = [
+            {
+                "appendCells": {
+                    "sheetId": ws_proyek.id,
+                    "fields": "*",
+                    "rows": [{"values": _project_row(project)}],
+                }
+            }
         ]
 
-        # append_row kadang overwrite baris terakhir, jadi kita update range spesifik
-        try:
-            await ws_proyek.update(
-                range_name=f'A{new_row_number}:J{new_row_number}',
-                values=[[str(v) if isinstance(v, str) else v for v in proj_values]],
-                value_input_option="RAW",
-            )
-            logger.info(f"Proyek {project.id_proyek} ditulis di baris {new_row_number} PEMASUKAN_PROYEK")
-        except Exception as e:
-            logger.error(f"Failed to append project row: {e}")
-            raise Exception("SHEETS_UNAVAILABLE")
-
-        # Tulis formula K-L-M (total_dibayar, sisa_piutang, status_bayar)
-        # persis di baris yang baru dibuat agar kolom tidak kosong.
-        try:
-            formulas = [[
-                f'=SUMIF(PEMBAYARAN!B:B; A{new_row_number}; PEMBAYARAN!D:D)',
-                f'=H{new_row_number} - K{new_row_number}',
-                f'=IF(L{new_row_number}<=0; "LUNAS"; "DP")',
-            ]]
-            await ws_proyek.update(
-                range_name=f'K{new_row_number}:M{new_row_number}',
-                values=formulas,
-                value_input_option='USER_ENTERED',
-            )
-            logger.info(f"Formula K-L-M ditulis di baris {new_row_number}")
-        except Exception as e:
-            logger.warning(f"Gagal menulis formula di baris {new_row_number}: {e}")
-
         if dp_payment:
-            try:
-                ws_bayar = await sh.worksheet("PEMBAYARAN")
-                pay_values = [
-                    dp_payment.id_bayar, dp_payment.id_proyek, dp_payment.tanggal.isoformat(),
-                    dp_payment.nominal, dp_payment.tipe, dp_payment.bulan_filter, dp_payment.dicatat_oleh
-                ]
-                rows_bayar = await ws_bayar.get_values("A1:A")
-                n_bayar = 1 + len([r for r in rows_bayar if r and r[0]])
-                await ws_bayar.update(
-                    range_name=f'A{n_bayar}:G{n_bayar}',
-                    values=[[str(v) if isinstance(v, str) else v for v in pay_values]],
-                    value_input_option="RAW",
-                )
-                logger.info(f"Pembayaran {dp_payment.id_bayar} ditulis di PEMBAYARAN")
-            except Exception as e:
-                logger.error(f"Failed to append payment row: {e}")
-                raise Exception("SHEETS_UNAVAILABLE")
+            ws_bayar = await sh.worksheet("PEMBAYARAN")
+            requests.append(
+                {
+                    "appendCells": {
+                        "sheetId": ws_bayar.id,
+                        "fields": "*",
+                        "rows": [{"values": _payment_row(dp_payment)}],
+                    }
+                }
+            )
+
+        try:
+            await sh.batch_update({"requests": requests})
+            logger.info(
+                "Proyek %s + %s ditulis atomic via appendCells",
+                project.id_proyek,
+                f"DP {dp_payment.id_bayar}" if dp_payment else "tanpa DP",
+            )
+        except Exception as e:
+            logger.error("Gagal menulis proyek/pembayaran: %s", e)
+            raise AppError("SHEETS_UNAVAILABLE", "Gagal menyimpan ke Google Sheets.", 503)
 
     async def write_payment(self, payment: Payment):
+        """Append 1 baris pembayaran. Kolom K-M proyek dihitung ulang otomatis
+        oleh formula SUMIF (ROW/INDIRECT), jadi tidak perlu sinkronisasi manual."""
         client = await self.agcm.authorize()
         sh = await client.open_by_key(self.spreadsheet_id)
         ws = await sh.worksheet("PEMBAYARAN")
-        pay_values = [
-            payment.id_bayar, payment.id_proyek, payment.tanggal.isoformat(),
-            payment.nominal, payment.tipe, payment.bulan_filter, payment.dicatat_oleh
-        ]
-        rows_bayar = await ws.get_values("A1:A")
-        n_bayar = 1 + len([r for r in rows_bayar if r and r[0]])
-        await ws.update(
-            range_name=f'A{n_bayar}:G{n_bayar}',
-            values=[[str(v) if isinstance(v, str) else v for v in pay_values]],
-            value_input_option="RAW"
-        )
-
-        # Sinkronkan kolom K-M (total dibayar, sisa, status) di baris proyek
         try:
-            ws_proyek = await sh.worksheet("PEMASUKAN_PROYEK")
-            ids = await ws_proyek.get_values("A2:A")
-            for i, r in enumerate(ids):
-                if r and r[0] == payment.id_proyek:
-                    n = i + 2
-                    await ws_proyek.update(
-                        range_name=f'K{n}:M{n}',
-                        values=[[
-                            f'=SUMIF(PEMBAYARAN!B:B; A{n}; PEMBAYARAN!D:D)',
-                            f'=H{n} - K{n}',
-                            f'=IF(L{n}<=0; "LUNAS"; "DP")',
-                        ]],
-                        value_input_option='USER_ENTERED',
-                    )
-                    break
+            await sh.batch_update(
+                {
+                    "requests": [
+                        {
+                            "appendCells": {
+                                "sheetId": ws.id,
+                                "fields": "*",
+                                "rows": [{"values": _payment_row(payment)}],
+                            }
+                        }
+                    ]
+                }
+            )
+            logger.info("Pembayaran %s ditulis via appendCells", payment.id_bayar)
         except Exception as e:
-            logger.warning(f"Gagal sinkron status proyek di sheet: {e}")
+            logger.error("Gagal menulis pembayaran: %s", e)
+            raise AppError("SHEETS_UNAVAILABLE", "Gagal menyimpan ke Google Sheets.", 503)
 
     async def write_expense(self, expense: Expense):
         client = await self.agcm.authorize()
         sh = await client.open_by_key(self.spreadsheet_id)
         ws = await sh.worksheet("PENGELUARAN")
-        exp_values = [
-            expense.id_pengeluaran, expense.tanggal.isoformat(), expense.kategori,
-            expense.keterangan, expense.nominal, expense.bulan_filter, expense.dibuat_oleh
-        ]
-        rows_exp = await ws.get_values("A1:A")
-        n_exp = 1 + len([r for r in rows_exp if r and r[0]])
-        await ws.update(
-            range_name=f'A{n_exp}:G{n_exp}',
-            values=[[str(v) if isinstance(v, str) else v for v in exp_values]],
-            value_input_option="RAW"
-        )
+        try:
+            await sh.batch_update(
+                {
+                    "requests": [
+                        {
+                            "appendCells": {
+                                "sheetId": ws.id,
+                                "fields": "*",
+                                "rows": [{"values": _expense_row(expense)}],
+                            }
+                        }
+                    ]
+                }
+            )
+            logger.info("Pengeluaran %s ditulis via appendCells", expense.id_pengeluaran)
+        except Exception as e:
+            logger.error("Gagal menulis pengeluaran: %s", e)
+            raise AppError("SHEETS_UNAVAILABLE", "Gagal menyimpan ke Google Sheets.", 503)

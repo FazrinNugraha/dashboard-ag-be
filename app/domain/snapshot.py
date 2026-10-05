@@ -39,6 +39,44 @@ class SnapshotCache:
         async with self._lock:
             await self._refresh_cache_unlocked()
 
+    async def append_project(self, project: Project, payment: Optional[Payment] = None) -> None:
+        """Tambahkan proyek (dan opsional DP) ke snapshot tanpa membaca ulang Sheets.
+
+        Dipanggil setelah penulisan sukses agar read-your-writes tetap berlaku.
+        Bila cache belum pernah diisi, lakukan refresh penuh sekali.
+        """
+        async with self._lock:
+            if self._cache is None:
+                await self._refresh_cache_unlocked()
+                return
+            projects, payments, expenses = self._cache
+            self._cache = (
+                projects + [project],
+                payments + ([payment] if payment is not None else []),
+                expenses,
+            )
+            self._last_loaded_at = datetime.now()
+
+    async def append_payment(self, payment: Payment) -> None:
+        """Tambahkan satu pembayaran ke snapshot tanpa membaca ulang Sheets."""
+        async with self._lock:
+            if self._cache is None:
+                await self._refresh_cache_unlocked()
+                return
+            projects, payments, expenses = self._cache
+            self._cache = (projects, payments + [payment], expenses)
+            self._last_loaded_at = datetime.now()
+
+    async def append_expense(self, expense: Expense) -> None:
+        """Tambahkan satu pengeluaran ke snapshot tanpa membaca ulang Sheets."""
+        async with self._lock:
+            if self._cache is None:
+                await self._refresh_cache_unlocked()
+                return
+            projects, payments, expenses = self._cache
+            self._cache = (projects, payments, expenses + [expense])
+            self._last_loaded_at = datetime.now()
+
     async def _refresh_cache_background(self):
         # Single-flight check
         if self._refreshing:

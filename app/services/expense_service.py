@@ -1,9 +1,10 @@
 import asyncio
-from datetime import datetime, date
+from datetime import date
 from app.core.errors import AppError
 from app.domain.snapshot import SnapshotCache
 from app.repositories.sheets_repository import GoogleSheetsRepository
 from app.schemas.domain import Expense
+from app.services.ids import next_sequential_id
 from pydantic import BaseModel
 from typing import Literal
 
@@ -29,21 +30,13 @@ class ExpenseService:
             raise AppError("VALIDATION_ERROR", "Nominal harus > 0", 422)
             
         async with self.write_lock:
+            # Pastikan snapshot segar agar ID tidak dihitung dari data basi.
+            await self.cache.force_refresh()
             _, _, expenses = await self.cache.get_data()
             
-            # Generate id_pengeluaran (OUT-YYMM-NNN)
+            # Generate id_pengeluaran (OUT-YYMM-NNN) yang dijamin belum terpakai
             prefix = f"OUT-{request.tanggal.strftime('%y%m')}-"
-            max_nnn = 0
-            for e in expenses:
-                if e.id_pengeluaran.startswith(prefix):
-                    try:
-                        nnn = int(e.id_pengeluaran.split("-")[-1])
-                        if nnn > max_nnn:
-                            max_nnn = nnn
-                    except ValueError:
-                        pass
-            
-            new_id = f"{prefix}{max_nnn + 1:03d}"
+            new_id = next_sequential_id(prefix, {e.id_pengeluaran for e in expenses})
             bulan_filter = request.tanggal.strftime("%Y-%m")
             
             expense = Expense(
@@ -58,7 +51,7 @@ class ExpenseService:
             
             await self.repository.write_expense(expense)
             
-            # Refresh cache
-            await self.cache.force_refresh()
+            # Update cache inkremental (read-your-writes)
+            await self.cache.append_expense(expense)
             
             return {"pengeluaran": expense.model_dump()}
