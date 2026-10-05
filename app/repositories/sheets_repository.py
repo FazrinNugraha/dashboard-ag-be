@@ -6,6 +6,18 @@ from app.schemas.domain import Project, Payment, Expense
 
 logger = logging.getLogger(__name__)
 
+def parse_int(v) -> int:
+    """Parse angka dari Sheets, mis. '8.000.000', 'Rp 8.000.000', 8000000."""
+    if v is None or v == '':
+        return 0
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip().replace('Rp', '').replace(' ', '')
+    neg = s.startswith('-')
+    digits = ''.join(ch for ch in s.split(',')[0] if ch.isdigit())
+    n = int(digits) if digits else 0
+    return -n if neg else n
+
 class SheetsRepositoryProtocol(Protocol):
     async def read_all(self) -> tuple[List[Project], List[Payment], List[Expense]]:
         """Reads all tabs in a single batchGet if possible, returning parsed models."""
@@ -58,13 +70,13 @@ class GoogleSheetsRepository:
                         nama_klien=row_padded[2],
                         alamat=row_padded[3],
                         pekerjaan=row_padded[4],
-                        subtotal=int(row_padded[5]) if row_padded[5] else 0,
-                        diskon=int(row_padded[6]) if row_padded[6] else 0,
-                        nilai_proyek=int(row_padded[7]) if row_padded[7] else 0,
+                        subtotal=parse_int(row_padded[5]),
+                        diskon=parse_int(row_padded[6]),
+                        nilai_proyek=parse_int(row_padded[7]),
                         bulan_filter=row_padded[8],
                         dibuat_oleh=row_padded[9],
-                        total_dibayar=int(row_padded[10]) if row_padded[10] else 0,
-                        sisa_piutang=int(row_padded[11]) if row_padded[11] else 0,
+                        total_dibayar=parse_int(row_padded[10]),
+                        sisa_piutang=parse_int(row_padded[11]),
                         status_bayar=row_padded[12] if row_padded[12] else "DP"
                     ))
                 except Exception as e:
@@ -81,7 +93,7 @@ class GoogleSheetsRepository:
                         id_bayar=row_padded[0],
                         id_proyek=row_padded[1],
                         tanggal=row_padded[2],
-                        nominal=int(row_padded[3]) if row_padded[3] else 0,
+                        nominal=parse_int(row_padded[3]),
                         tipe=row_padded[4],
                         bulan_filter=row_padded[5],
                         dicatat_oleh=row_padded[6]
@@ -101,7 +113,7 @@ class GoogleSheetsRepository:
                         tanggal=row_padded[1],
                         kategori=row_padded[2],
                         keterangan=row_padded[3],
-                        nominal=int(row_padded[4]) if row_padded[4] else 0,
+                        nominal=parse_int(row_padded[4]),
                         bulan_filter=row_padded[5],
                         dibuat_oleh=row_padded[6]
                     ))
@@ -127,11 +139,11 @@ class GoogleSheetsRepository:
             project.nilai_proyek, project.bulan_filter, project.dibuat_oleh
         ]
 
-        # append_row menulis persis setelah baris data terakhir yang terisi
-        # (Google Sheets versi async menambahkan baris grid bila perlu).
+        # append_row kadang overwrite baris terakhir, jadi kita update range spesifik
         try:
-            await ws_proyek.append_row(
-                [str(v) if isinstance(v, str) else v for v in proj_values],
+            await ws_proyek.update(
+                range_name=f'A{new_row_number}:J{new_row_number}',
+                values=[[str(v) if isinstance(v, str) else v for v in proj_values]],
                 value_input_option="RAW",
             )
             logger.info(f"Proyek {project.id_proyek} ditulis di baris {new_row_number} PEMASUKAN_PROYEK")
@@ -163,8 +175,11 @@ class GoogleSheetsRepository:
                     dp_payment.id_bayar, dp_payment.id_proyek, dp_payment.tanggal.isoformat(),
                     dp_payment.nominal, dp_payment.tipe, dp_payment.bulan_filter, dp_payment.dicatat_oleh
                 ]
-                await ws_bayar.append_row(
-                    [str(v) if isinstance(v, str) else v for v in pay_values],
+                rows_bayar = await ws_bayar.get_values("A1:A")
+                n_bayar = 1 + len([r for r in rows_bayar if r and r[0]])
+                await ws_bayar.update(
+                    range_name=f'A{n_bayar}:G{n_bayar}',
+                    values=[[str(v) if isinstance(v, str) else v for v in pay_values]],
                     value_input_option="RAW",
                 )
                 logger.info(f"Pembayaran {dp_payment.id_bayar} ditulis di PEMBAYARAN")
@@ -180,7 +195,33 @@ class GoogleSheetsRepository:
             payment.id_bayar, payment.id_proyek, payment.tanggal.isoformat(),
             payment.nominal, payment.tipe, payment.bulan_filter, payment.dicatat_oleh
         ]
-        await ws.append_row(pay_values, value_input_option="RAW")
+        rows_bayar = await ws.get_values("A1:A")
+        n_bayar = 1 + len([r for r in rows_bayar if r and r[0]])
+        await ws.update(
+            range_name=f'A{n_bayar}:G{n_bayar}',
+            values=[[str(v) if isinstance(v, str) else v for v in pay_values]],
+            value_input_option="RAW"
+        )
+
+        # Sinkronkan kolom K-M (total dibayar, sisa, status) di baris proyek
+        try:
+            ws_proyek = await sh.worksheet("PEMASUKAN_PROYEK")
+            ids = await ws_proyek.get_values("A2:A")
+            for i, r in enumerate(ids):
+                if r and r[0] == payment.id_proyek:
+                    n = i + 2
+                    await ws_proyek.update(
+                        range_name=f'K{n}:M{n}',
+                        values=[[
+                            f'=SUMIF(PEMBAYARAN!B:B; A{n}; PEMBAYARAN!D:D)',
+                            f'=H{n} - K{n}',
+                            f'=IF(L{n}<=0; "LUNAS"; "DP")',
+                        ]],
+                        value_input_option='USER_ENTERED',
+                    )
+                    break
+        except Exception as e:
+            logger.warning(f"Gagal sinkron status proyek di sheet: {e}")
 
     async def write_expense(self, expense: Expense):
         client = await self.agcm.authorize()
@@ -190,4 +231,10 @@ class GoogleSheetsRepository:
             expense.id_pengeluaran, expense.tanggal.isoformat(), expense.kategori,
             expense.keterangan, expense.nominal, expense.bulan_filter, expense.dibuat_oleh
         ]
-        await ws.append_row(exp_values, value_input_option="RAW")
+        rows_exp = await ws.get_values("A1:A")
+        n_exp = 1 + len([r for r in rows_exp if r and r[0]])
+        await ws.update(
+            range_name=f'A{n_exp}:G{n_exp}',
+            values=[[str(v) if isinstance(v, str) else v for v in exp_values]],
+            value_input_option="RAW"
+        )
