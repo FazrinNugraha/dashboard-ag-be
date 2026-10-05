@@ -1,3 +1,4 @@
+import re
 from typing import Protocol, List, Dict
 import gspread_asyncio
 import gspread
@@ -5,6 +6,8 @@ import logging
 from app.core.errors import AppError
 from app.core.retry import call_with_retry
 from app.schemas.domain import Project, Payment, Expense
+
+_SCIENTIFIC_RE = re.compile(r"^-?\d+(?:\.\d+)?[eE][+-]?\d+$")
 
 logger = logging.getLogger(__name__)
 
@@ -86,20 +89,63 @@ def _expense_row(expense: Expense) -> list:
 
 
 def parse_int(v) -> int:
-    """Parse angka dari Sheets, mis. '8.000.000', 'Rp 8.000.000', 8000000."""
+    """Parse angka dari Sheets dengan berbagai format.
+
+    Menangani: integer/float, 'Rp 8.000.000', '8.000.000', '6,700,000',
+    '3,000.000', notasi ilmiah '2.1E+07', dan campuran keduanya.
+    """
     if v is None or v == '':
         return 0
     if isinstance(v, (int, float)):
         return int(v)
+
     s = str(v).strip().replace('Rp', '').replace(' ', '')
+    if not s:
+        return 0
+
+    # Notasi ilmiah dari sel numerik besar -> pakai float.
+    if _SCIENTIFIC_RE.match(s):
+        try:
+            return int(float(s))
+        except ValueError:
+            return 0
+
+    # Normalisasi pemisah ribuan/desimal: buang titik & koma, jaga tanda minus.
     neg = s.startswith('-')
-    digits = ''.join(ch for ch in s.split(',')[0] if ch.isdigit())
+    digits = ''.join(ch for ch in s if ch.isdigit())
     n = int(digits) if digits else 0
     return -n if neg else n
+
+def _parse_rows(values, index: int, width: int, factory, tab_name: str, stats: dict) -> list:
+    """Parse baris satu tab memakai `factory`, catat jumlah sah/rusak.
+
+    Baris kosong dilewati tanpa dihitung; baris yang gagal validasi dicatat
+    sebagai `skipped` agar terlihat di GET /health/sheets.
+    """
+    parsed = []
+    skipped = 0
+    value_ranges = values.get("valueRanges", [])
+    if index < len(value_ranges) and "values" in value_ranges[index]:
+        for row in value_ranges[index]["values"]:
+            if not row or not row[0]:
+                continue
+            try:
+                row_padded = row + [''] * (width - len(row))
+                parsed.append(factory(row_padded))
+            except Exception as e:
+                skipped += 1
+                logger.warning("Skipping malformed %s row: %s. Error: %s", tab_name, row, e)
+    stats[tab_name] = {"parsed": len(parsed), "skipped": skipped}
+    return parsed
+
 
 class SheetsRepositoryProtocol(Protocol):
     async def read_all(self) -> tuple[List[Project], List[Payment], List[Expense]]:
         """Reads all tabs in a single batchGet if possible, returning parsed models."""
+        pass
+
+    def last_read_stats(self) -> dict:
+        """Statistik pembacaan terakhir (jumlah baris sah/dilewati per tab)."""
         pass
     async def write_project_and_dp(self, project: Project, dp_payment: Payment | None):
         pass
@@ -112,6 +158,10 @@ class GoogleSheetsRepository:
     def __init__(self, agcm: gspread_asyncio.AsyncioGspreadClientManager, spreadsheet_id: str):
         self.agcm = agcm
         self.spreadsheet_id = spreadsheet_id
+        self._read_stats: dict = {}
+
+    def last_read_stats(self) -> dict:
+        return self._read_stats
 
     async def _get_worksheet(self, title: str):
         client = await self.agcm.authorize()
@@ -131,74 +181,37 @@ class GoogleSheetsRepository:
             logger.error(f"Failed to read from Google Sheets: {e}")
             raise AppError("SHEETS_UNAVAILABLE", "Google Sheets tidak dapat dijangkau.", 503)
 
-        projects = []
-        payments = []
-        expenses = []
+        stats: dict = {}
 
-        # Parse Projects (values[0]['values'])
-        if 'values' in values['valueRanges'][0]:
-            for row in values['valueRanges'][0]['values']:
-                if not row or not row[0]: # Skip empty rows
-                    continue
-                try:
-                    # Pad row if some trailing columns are empty
-                    row_padded = row + [''] * (13 - len(row))
-                    projects.append(Project(
-                        id_proyek=row_padded[0],
-                        tanggal=row_padded[1],
-                        nama_klien=row_padded[2],
-                        alamat=row_padded[3],
-                        pekerjaan=row_padded[4],
-                        subtotal=parse_int(row_padded[5]),
-                        diskon=parse_int(row_padded[6]),
-                        nilai_proyek=parse_int(row_padded[7]),
-                        bulan_filter=row_padded[8],
-                        dibuat_oleh=row_padded[9],
-                        total_dibayar=parse_int(row_padded[10]),
-                        sisa_piutang=parse_int(row_padded[11]),
-                        status_bayar=row_padded[12] if row_padded[12] else "DP"
-                    ))
-                except Exception as e:
-                    logger.warning(f"Skipping malformed project row: {row}. Error: {e}")
+        projects = _parse_rows(
+            values, 0, 13,
+            lambda r: Project(
+                id_proyek=r[0], tanggal=r[1], nama_klien=r[2], alamat=r[3],
+                pekerjaan=r[4], subtotal=parse_int(r[5]), diskon=parse_int(r[6]),
+                nilai_proyek=parse_int(r[7]), bulan_filter=r[8], dibuat_oleh=r[9],
+                total_dibayar=parse_int(r[10]), sisa_piutang=parse_int(r[11]),
+                status_bayar=r[12] if r[12] else "DP",
+            ),
+            "PEMASUKAN_PROYEK", stats,
+        )
+        payments = _parse_rows(
+            values, 1, 7,
+            lambda r: Payment(
+                id_bayar=r[0], id_proyek=r[1], tanggal=r[2], nominal=parse_int(r[3]),
+                tipe=r[4], bulan_filter=r[5], dicatat_oleh=r[6],
+            ),
+            "PEMBAYARAN", stats,
+        )
+        expenses = _parse_rows(
+            values, 2, 7,
+            lambda r: Expense(
+                id_pengeluaran=r[0], tanggal=r[1], kategori=r[2], keterangan=r[3],
+                nominal=parse_int(r[4]), bulan_filter=r[5], dibuat_oleh=r[6],
+            ),
+            "PENGELUARAN", stats,
+        )
 
-        # Parse Payments (values[1]['values'])
-        if 'values' in values['valueRanges'][1]:
-            for row in values['valueRanges'][1]['values']:
-                if not row or not row[0]:
-                    continue
-                try:
-                    row_padded = row + [''] * (7 - len(row))
-                    payments.append(Payment(
-                        id_bayar=row_padded[0],
-                        id_proyek=row_padded[1],
-                        tanggal=row_padded[2],
-                        nominal=parse_int(row_padded[3]),
-                        tipe=row_padded[4],
-                        bulan_filter=row_padded[5],
-                        dicatat_oleh=row_padded[6]
-                    ))
-                except Exception as e:
-                    logger.warning(f"Skipping malformed payment row: {row}. Error: {e}")
-
-        # Parse Expenses (values[2]['values'])
-        if 'values' in values['valueRanges'][2]:
-            for row in values['valueRanges'][2]['values']:
-                if not row or not row[0]:
-                    continue
-                try:
-                    row_padded = row + [''] * (7 - len(row))
-                    expenses.append(Expense(
-                        id_pengeluaran=row_padded[0],
-                        tanggal=row_padded[1],
-                        kategori=row_padded[2],
-                        keterangan=row_padded[3],
-                        nominal=parse_int(row_padded[4]),
-                        bulan_filter=row_padded[5],
-                        dibuat_oleh=row_padded[6]
-                    ))
-                except Exception as e:
-                    logger.warning(f"Skipping malformed expense row: {row}. Error: {e}")
-
+        self._read_stats = stats
         return projects, payments, expenses
 
     async def write_project_and_dp(self, project: Project, dp_payment: Payment | None):

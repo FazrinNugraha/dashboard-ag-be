@@ -1,92 +1,126 @@
-import asyncio
+"""Menyiapkan struktur spreadsheet DB_Agungjaya (idempotent).
+
+Dijalankan sekali. Membuat tab, header, freeze baris 1, format angka, validasi
+dropdown untuk `tipe`/`kategori`, dan header tebal. Tidak menulis data.
+
+Pakai:
+    python scripts/setup_sheet.py
+"""
 import os
 import sys
-from dotenv import load_dotenv
 
-# Load env vars
-load_dotenv()
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Check for gspread async
-try:
-    import gspread_asyncio
-    from google.oauth2.service_account import Credentials
-except ImportError:
-    print("Please install gspread-asyncio and google-auth: pip install gspread-asyncio google-auth")
-    sys.exit(1)
+import gspread
+from google.oauth2.service_account import Credentials
+from gspread.utils import ValidationConditionType
 
-def get_creds():
-    # To obtain service account credentials
+from app.core.config import get_settings
+
+SCOPES = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive",
+]
+
+TABS = {
+    "PEMASUKAN_PROYEK": [
+        "id_proyek", "tanggal", "nama_klien", "alamat", "pekerjaan",
+        "subtotal", "diskon", "nilai_proyek", "bulan_filter", "dibuat_oleh",
+        "total_dibayar", "sisa_piutang", "status_bayar",
+    ],
+    "PEMBAYARAN": [
+        "id_bayar", "id_proyek", "tanggal", "nominal", "tipe",
+        "bulan_filter", "dicatat_oleh",
+    ],
+    "PENGELUARAN": [
+        "id_pengeluaran", "tanggal", "kategori", "keterangan", "nominal",
+        "bulan_filter", "dibuat_oleh",
+    ],
+    "REKAP_DASHBOARD": [
+        "Bulan", "Omzet", "Kas Masuk", "Piutang", "Pengeluaran", "Laba Bersih",
+    ],
+}
+
+# kolom uang (1-based) per tab untuk format angka ribuan.
+MONEY_COLUMNS = {
+    "PEMASUKAN_PROYEK": [6, 7, 8, 11, 12],  # subtotal, diskon, nilai, dibayar, sisa
+    "PEMBAYARAN": [4],
+    "PENGELUARAN": [5],
+}
+
+# validasi dropdown: tab -> (kolom_1based, nilai)
+DROPDOWNS = {
+    "PEMBAYARAN": (5, ["DP", "CICILAN", "PELUNASAN"]),
+    "PENGELUARAN": (3, ["BAHAN_BAKU", "AKSESORIS", "UPAH", "OPERASIONAL", "LAINNYA"]),
+}
+
+
+def _col_letter(index_1based: int) -> str:
+    letters = ""
+    while index_1based > 0:
+        index_1based, rem = divmod(index_1based - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+
+def main() -> None:
+    settings = get_settings()
+    if not settings.SPREADSHEET_ID:
+        print("ERROR: SPREADSHEET_ID belum diatur di .env")
+        sys.exit(1)
+    if not settings.GOOGLE_SERVICE_ACCOUNT_FILE or not os.path.exists(settings.GOOGLE_SERVICE_ACCOUNT_FILE):
+        print(f"ERROR: file kredensial tidak ditemukan: {settings.GOOGLE_SERVICE_ACCOUNT_FILE!r}")
+        sys.exit(1)
+
+    print("Autentikasi ke Google Sheets...")
     creds = Credentials.from_service_account_file(
-        'credentials.json',
-        scopes=[
-            'https://spreadsheets.google.com/feeds',
-            'https://www.googleapis.com/auth/drive'
-        ]
+        settings.GOOGLE_SERVICE_ACCOUNT_FILE, scopes=SCOPES
     )
-    return creds
+    client = gspread.authorize(creds)
 
-async def main():
-    SPREADSHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-    if not SPREADSHEET_ID:
-        print("ERROR: GOOGLE_SHEET_ID is not set in .env")
-        sys.exit(1)
-        
-    if not os.path.exists("credentials.json"):
-        print("ERROR: credentials.json not found in the root directory")
-        sys.exit(1)
-
-    print("Authenticating with Google Sheets...")
-    agcm = gspread_asyncio.AsyncioGspreadClientManager(get_creds)
-    client = await agcm.authorize()
-
-    print(f"Opening spreadsheet: {SPREADSHEET_ID}")
+    print(f"Membuka spreadsheet: {settings.SPREADSHEET_ID}")
     try:
-        sh = await client.open_by_key(SPREADSHEET_ID)
-    except Exception as e:
-        print(f"Failed to open spreadsheet: {e}")
-        print("Make sure the Service Account email is added as an Editor to the Google Sheet.")
+        sh = client.open_by_key(settings.SPREADSHEET_ID)
+    except Exception as e:  # noqa: BLE001
+        print(f"Gagal membuka spreadsheet: {e}")
+        print("Pastikan e-mail Service Account sudah ditambahkan sebagai Editor.")
         sys.exit(1)
 
-    TABS = {
-        "PEMASUKAN_PROYEK": [
-            "id_proyek", "tanggal", "nama_klien", "alamat", "pekerjaan", 
-            "subtotal", "diskon", "nilai_proyek", "bulan_filter", "dibuat_oleh", 
-            "total_dibayar", "sisa_piutang", "status_bayar"
-        ],
-        "PEMBAYARAN": [
-            "id_bayar", "id_proyek", "tanggal", "nominal", "tipe", "bulan_filter", "dicatat_oleh"
-        ],
-        "PENGELUARAN": [
-            "id_pengeluaran", "tanggal", "kategori", "keterangan", "nominal", "bulan_filter", "dibuat_oleh"
-        ],
-        "REKAP_DASHBOARD": [
-            "Bulan", "Omzet", "Kas Masuk", "Piutang", "Pengeluaran", "Laba Bersih"
-        ]
-    }
+    existing = {ws.title: ws for ws in sh.worksheets()}
 
-    # Iterate through tabs and create/update them
     for tab_name, headers in TABS.items():
-        try:
-            worksheet = await sh.worksheet(tab_name)
-            print(f"Tab '{tab_name}' already exists.")
-        except Exception:
-            print(f"Creating tab '{tab_name}'...")
-            worksheet = await sh.add_worksheet(title=tab_name, rows=1000, cols=20)
-        
-        # Setup headers in row 1
-        print(f"Setting headers for '{tab_name}'...")
-        # Since gspread_asyncio uses 1-based indexing for rows/cols in some functions,
-        # but batch_update is preferred for performance.
-        # Let's use simple append or range update for headers.
-        cell_list = await worksheet.range(1, 1, 1, len(headers))
-        for i, cell in enumerate(cell_list):
-            cell.value = headers[i]
-        await worksheet.update_cells(cell_list)
-        
-        # Formatting headers (bold)
-        await worksheet.format('A1:Z1', {'textFormat': {'bold': True}})
+        if tab_name in existing:
+            ws = existing[tab_name]
+            print(f"Tab '{tab_name}' sudah ada.")
+        else:
+            print(f"Membuat tab '{tab_name}'...")
+            ws = sh.add_worksheet(title=tab_name, rows=1000, cols=max(len(headers), 13))
 
-    print("Spreadsheet setup completed successfully!")
+        # Header + tebal + freeze baris 1
+        ws.update(values=[headers], range_name=f"A1:{_col_letter(len(headers))}1",
+                  value_input_option="RAW")
+        ws.format("1:1", {"textFormat": {"bold": True}})
+        ws.freeze(rows=1)
 
-if __name__ == '__main__':
-    asyncio.run(main())
+        # Format angka kolom uang
+        for col in MONEY_COLUMNS.get(tab_name, []):
+            letter = _col_letter(col)
+            ws.format(f"{letter}2:{letter}", {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}})
+
+        # Validasi dropdown
+        if tab_name in DROPDOWNS:
+            col, options = DROPDOWNS[tab_name]
+            letter = _col_letter(col)
+            ws.add_validation(
+                f"{letter}2:{letter}1000",
+                ValidationConditionType.one_of_list,
+                options,
+                strict=False,
+                showCustomUi=True,
+            )
+
+    print("Selesai. Struktur spreadsheet siap.")
+
+
+if __name__ == "__main__":
+    main()

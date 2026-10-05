@@ -39,6 +39,35 @@ class SnapshotCache:
         async with self._lock:
             await self._refresh_cache_unlocked()
 
+    def stats(self) -> dict:
+        """Ringkasan keadaan snapshot untuk health check."""
+        if self._cache is None:
+            return {
+                "loaded": False,
+                "loaded_at": None,
+                "age_seconds": None,
+                "counts": {"projects": 0, "payments": 0, "expenses": 0},
+                "rows": {},
+            }
+        projects, payments, expenses = self._cache
+        age = None
+        if self._last_loaded_at is not None:
+            age = round((datetime.now() - self._last_loaded_at).total_seconds(), 1)
+        rows = {}
+        if hasattr(self.repository, "last_read_stats"):
+            rows = self.repository.last_read_stats()
+        return {
+            "loaded": True,
+            "loaded_at": self._last_loaded_at.isoformat() if self._last_loaded_at else None,
+            "age_seconds": age,
+            "counts": {
+                "projects": len(projects),
+                "payments": len(payments),
+                "expenses": len(expenses),
+            },
+            "rows": rows,
+        }
+
     async def append_project(self, project: Project, payment: Optional[Payment] = None) -> None:
         """Tambahkan proyek (dan opsional DP) ke snapshot tanpa membaca ulang Sheets.
 
