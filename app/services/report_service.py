@@ -7,7 +7,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from app.domain.snapshot import SnapshotCache
-from app.domain.metrics import calculate_kpi
+from app.domain.metrics import calculate_period_kpi, compute_receivables
 from app.schemas.domain import Project, Expense
 
 class ReportService:
@@ -18,50 +18,28 @@ class ReportService:
         # period_type: 'month' or 'year'
         # period_value: 'YYYY-MM' or 'YYYY'
         projects, payments, expenses = await self.cache.get_data()
-        
-        filtered_projects = []
-        filtered_expenses = []
-        
-        if period_type == "month":
-            filtered_projects = [p for p in projects if p.bulan_filter == period_value]
-            filtered_expenses = [e for e in expenses if e.bulan_filter == period_value]
-            kpi = calculate_kpi(projects, payments, expenses, period_value)
-        else:
-            # year filter
-            filtered_projects = [p for p in projects if p.bulan_filter.startswith(period_value)]
-            filtered_expenses = [e for e in expenses if e.bulan_filter.startswith(period_value)]
-            
-            # KPI logic for year - sum up kas masuk, pengeluaran, etc.
-            # calculate_kpi expects month. We'll do a quick manual sum.
-            omzet = sum(p.nilai_proyek for p in filtered_projects)
-            kas_masuk = sum(p.nominal for p in payments if p.bulan_filter.startswith(period_value))
-            peng_total = sum(e.nominal for e in filtered_expenses)
-            laba = kas_masuk - peng_total
-            kpi = {
-                "omzet": {"value": omzet},
-                "kas_masuk": {"value": kas_masuk},
-                "pengeluaran": {"value": peng_total},
-                "laba_bersih": {"value": laba}
-            }
 
-        # Receivables (Global, not filtered by period, as per PRD)
-        receivables = []
-        payments_by_project = {}
-        for p in payments:
-            payments_by_project[p.id_proyek] = payments_by_project.get(p.id_proyek, 0) + p.nominal
-            
-        for proj in projects:
-            total_dibayar = payments_by_project.get(proj.id_proyek, 0)
-            sisa = max(proj.nilai_proyek - total_dibayar, 0)
-            if sisa > 0:
-                receivables.append({
-                    "id": proj.id_proyek,
-                    "klien": proj.nama_klien,
-                    "tanggal": proj.tanggal,
-                    "nilai": proj.nilai_proyek,
-                    "sisa": sisa
-                })
-        
+        def matches(bulan: str) -> bool:
+            if period_type == "year":
+                return bulan.startswith(period_value)
+            return bulan == period_value
+
+        filtered_projects = [p for p in projects if matches(p.bulan_filter)]
+        filtered_expenses = [e for e in expenses if matches(e.bulan_filter)]
+        kpi = calculate_period_kpi(projects, payments, expenses, period_type, period_value)
+
+        # Receivables (global, tidak difilter periode) dari sumber tunggal
+        receivables = [
+            {
+                "id": proj.id_proyek,
+                "klien": proj.nama_klien,
+                "tanggal": proj.tanggal,
+                "nilai": proj.nilai_proyek,
+                "sisa": sisa,
+            }
+            for proj, _, sisa in compute_receivables(projects, payments)
+        ]
+
         return kpi, filtered_projects, filtered_expenses, receivables
 
     def generate_excel(self, kpi: dict, projects: List[Project], expenses: List[Expense], receivables: List[dict]) -> bytes:
