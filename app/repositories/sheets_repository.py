@@ -173,8 +173,15 @@ class GoogleSheetsRepository:
         try:
             values = await call_with_retry(lambda: sh.values_batch_get(ranges))
         except Exception as e:
-            logger.error(f"Failed to read from Google Sheets: {e}")
-            raise AppError("SHEETS_UNAVAILABLE", "Google Sheets tidak dapat dijangkau.", 503)
+            err_str = str(e)
+            # Sheet hanya punya header (tanpa baris data) → range A2:X out-of-bounds.
+            # Kembalikan data kosong agar dashboard tetap bisa jalan.
+            if "[400]" in err_str and "exceeds grid limits" in err_str:
+                logger.warning("Sheet kosong (hanya header), mengembalikan data kosong: %s", e)
+                values = {"valueRanges": []}
+            else:
+                logger.error(f"Failed to read from Google Sheets: {e}")
+                raise AppError("SHEETS_UNAVAILABLE", "Google Sheets tidak dapat dijangkau.", 503)
 
         stats: dict = {}
 

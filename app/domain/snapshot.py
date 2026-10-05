@@ -70,18 +70,35 @@ class SnapshotCache:
         }
 
     async def append_project(self, project: Project, payment: Optional[Payment] = None) -> None:
-        """Tambahkan proyek (dan opsional DP) ke snapshot tanpa membaca ulang Sheets.
+        """Tambahkan proyek (dan opsional DP/PELUNASAN) ke snapshot tanpa membaca ulang Sheets.
 
         Dipanggil setelah penulisan sukses agar read-your-writes tetap berlaku.
         Bila cache belum pernah diisi, lakukan refresh penuh sekali.
+
+        PENTING: hitung total_dibayar / sisa_piutang / status_bayar dari payment
+        yang ikut diappend, agar cache langsung mencerminkan status yang benar
+        (bukan default "DP" dari constructor Project).
         """
         async with self._lock:
             if self._cache is None:
                 await self._refresh_cache_unlocked()
                 return
             projects, payments, expenses = self._cache
+
+            # Hitung ulang field kalkulasi berdasarkan payment yang baru disertakan
+            total_dibayar = payment.nominal if payment is not None else 0
+            sisa_piutang = max(project.nilai_proyek - total_dibayar, 0)
+            status_bayar = "LUNAS" if sisa_piutang <= 0 else "DP"
+
+            # Buat salinan project dengan field kalkulasi yang benar
+            updated_project = project.model_copy(update={
+                "total_dibayar": total_dibayar,
+                "sisa_piutang": sisa_piutang,
+                "status_bayar": status_bayar,
+            })
+
             self._cache = (
-                projects + [project],
+                projects + [updated_project],
                 payments + ([payment] if payment is not None else []),
                 expenses,
             )
