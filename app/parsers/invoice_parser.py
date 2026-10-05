@@ -19,11 +19,12 @@ def validate_pdf_bytes(data: bytes, max_bytes: int) -> None:
         raise AppError("PDF_INVALID", "File bukan PDF yang valid.", 415)
 
 
-def extract_pdf_text(data: bytes) -> str:
-    """Baca seluruh teks dari PDF. Murni lokal, tidak memanggil AI.
+def validate_pdf_readable(data: bytes) -> None:
+    """Pastikan byte PDF dapat dibuka (struktur valid, tidak rusak/terenkripsi).
 
-    Melempar PDF_INVALID bila file tidak dapat dibaca/dienkripsi. PDF yang
-    rusak ditolak di sini sehingga tidak perlu mengirim ke Gemini.
+    Hanya menolak PDF yang benar-benar tidak dapat dibaca. PDF hasil scan atau
+    gambar (tanpa lapisan teks) tetap valid di sini karena Gemini dapat membaca
+    isinya secara visual.
     """
     from pypdf import PdfReader
 
@@ -31,33 +32,19 @@ def extract_pdf_text(data: bytes) -> str:
         reader = PdfReader(io.BytesIO(data))
         if reader.is_encrypted:
             raise AppError("PDF_INVALID", "File PDF terenkripsi tidak didukung.", 415)
-        pages = reader.pages
-        if len(pages) == 0:
+        if len(reader.pages) == 0:
             raise AppError("PDF_INVALID", "PDF tidak memiliki halaman.", 415)
-        texts = [(page.extract_text() or "") for page in pages]
     except AppError:
         raise
     except Exception:
         raise AppError("PDF_INVALID", "File PDF tidak dapat dibaca.", 415)
 
-    return "\n".join(texts).strip()
-
-
-def validate_pdf_text(data: bytes) -> str:
-    """Pastikan PDF dapat dibaca dan berisi teks (bukan hasil scan kosong)."""
-    text = extract_pdf_text(data)
-    if not text.strip():
-        raise AppError(
-            "PDF_NO_TEXT",
-            "PDF tidak berisi teks (kemungkinan hasil scan/gambar).",
-            422,
-        )
-    return text
-
 
 def build_extraction_prompt() -> str:
     return """
-    Ekstrak data dari teks invoice berikut ini dengan cermat.
+    Ekstrak data dari dokumen invoice berikut ini dengan cermat. Dokumen dapat
+    berupa teks maupun hasil scan/gambar, jadi baca seluruh isi dokumen secara
+    visual bila perlu.
     Aturan:
     1. nomor_invoice: Cari pola INV-YYMM-NNN (contoh INV-2610-001). Jika sama sekali tidak ada, buat "INV-AUTO-9999".
     2. nama_klien: Ambil nama orang/perusahaan setelah tulisan INVOICE TO.
@@ -76,8 +63,9 @@ def build_extraction_prompt() -> str:
 
 
 def parse_invoice_pdf(data: bytes) -> ExtractedInvoice:
-    # Validasi lokal dulu: PDF rusak/tanpa teks ditolak tanpa memanggil AI.
-    validate_pdf_text(data)
+    # Tolak hanya PDF yang rusak. PDF hasil scan/gambar tetap diteruskan ke AI
+    # karena Gemini membaca dokumen secara visual.
+    validate_pdf_readable(data)
 
     from google import genai
     from google.genai import types

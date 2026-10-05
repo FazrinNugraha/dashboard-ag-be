@@ -11,10 +11,9 @@ from reportlab.pdfgen import canvas
 from app.core.errors import AppError
 from app.parsers.invoice_parser import (
     build_extraction_prompt,
-    extract_pdf_text,
     parse_invoice_pdf,
     validate_pdf_bytes,
-    validate_pdf_text,
+    validate_pdf_readable,
 )
 
 
@@ -45,27 +44,19 @@ class TestValidatePdfBytes:
         validate_pdf_bytes(_make_pdf("halo"), 10_000_000)
 
 
-class TestValidatePdfText:
+class TestValidatePdfReadable:
     def test_pdf_rusak_ditolak_415(self):
         with pytest.raises(AppError) as exc:
-            validate_pdf_text(b"%PDF-1.4 rusak total")
+            validate_pdf_readable(b"%PDF-1.4 rusak total")
         assert exc.value.code == "PDF_INVALID"
         assert exc.value.status_code == 415
 
-    def test_pdf_tanpa_teks_ditolak_422(self):
-        with pytest.raises(AppError) as exc:
-            validate_pdf_text(_make_pdf())
-        assert exc.value.code == "PDF_NO_TEXT"
-        assert exc.value.status_code == 422
+    def test_pdf_berteks_lolos(self):
+        validate_pdf_readable(_make_pdf("INVOICE TO BPK YUSUF"))
 
-    def test_pdf_berteks_mengembalikan_teks(self):
-        text = validate_pdf_text(_make_pdf("INVOICE TO BPK YUSUF"))
-        assert "BPK YUSUF" in text
-
-    def test_extract_pdf_text_rusak_ditolak(self):
-        with pytest.raises(AppError) as exc:
-            extract_pdf_text(b"%PDF-1.4 rusak total")
-        assert exc.value.code == "PDF_INVALID"
+    def test_pdf_tanpa_teks_tetap_lolos(self):
+        # PDF hasil scan/gambar harus diteruskan ke AI, bukan ditolak di sini.
+        validate_pdf_readable(_make_pdf())
 
 
 class TestParseInvoicePdf:
@@ -74,11 +65,6 @@ class TestParseInvoicePdf:
         with pytest.raises(AppError) as exc:
             parse_invoice_pdf(b"%PDF-1.4 rusak total")
         assert exc.value.code == "PDF_INVALID"
-
-    def test_tolak_pdf_tanpa_teks(self):
-        with pytest.raises(AppError) as exc:
-            parse_invoice_pdf(_make_pdf())
-        assert exc.value.code == "PDF_NO_TEXT"
 
 
 def test_prompt_memuat_field_wajib():
