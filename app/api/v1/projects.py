@@ -8,7 +8,7 @@ import asyncio
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
-@router.get("")
+@router.get("", dependencies=[Depends(get_current_admin)])
 async def get_projects(
     month: str = Query(None, description="Filter by YYYY-MM"),
     q: str = Query(None, description="Search by client name"),

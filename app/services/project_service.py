@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime, date
-from fastapi import HTTPException
 from collections import defaultdict
+from app.core.errors import AppError
 from app.domain.snapshot import SnapshotCache
 from app.repositories.sheets_repository import GoogleSheetsRepository
 from app.schemas.project import ProjectCreateRequest, PaymentCreateRequest
@@ -25,14 +25,14 @@ class ProjectService:
             
             # 1. Cek duplikat id_proyek (BR-06)
             if any(p.id_proyek == request.id_proyek for p in projects):
-                raise HTTPException(status_code=409, detail={"code": "INVOICE_DUPLICATE", "message": "Nomor invoice sudah tercatat"})
+                raise AppError("INVOICE_DUPLICATE", "Nomor invoice sudah tercatat", 409)
 
             # 2. Hitung nilai_proyek (BR-01)
             nilai_proyek = request.subtotal - request.diskon
             
             # 3. Validasi DP (BR-03)
             if request.dp > nilai_proyek:
-                raise HTTPException(status_code=422, detail={"code": "DP_EXCEEDS_VALUE", "message": "DP melebihi nilai proyek"})
+                raise AppError("DP_EXCEEDS_VALUE", "DP melebihi nilai proyek", 422)
 
             bulan_filter = request.tanggal.strftime("%Y-%m")
             
@@ -99,24 +99,25 @@ class ProjectService:
             # Find project
             project = next((p for p in projects if p.id_proyek == id_proyek), None)
             if not project:
-                raise HTTPException(status_code=404, detail={"code": "PROJECT_NOT_FOUND", "message": "Proyek tidak ditemukan"})
+                raise AppError("PROJECT_NOT_FOUND", "Proyek tidak ditemukan", 404)
                 
             # Calculate total dibayar
             total_dibayar = sum(p.nominal for p in payments if p.id_proyek == id_proyek)
             sisa = max(project.nilai_proyek - total_dibayar, 0)
             
             if sisa <= 0:
-                raise HTTPException(status_code=422, detail={"code": "PAYMENT_EXCEEDS_BALANCE", "message": "Proyek sudah lunas"})
+                raise AppError("PAYMENT_EXCEEDS_BALANCE", "Proyek sudah lunas", 422)
                 
             if request.nominal > sisa:
-                raise HTTPException(status_code=422, detail={
-                    "code": "PAYMENT_EXCEEDS_BALANCE", 
-                    "message": "Nominal melebihi sisa piutang",
-                    "details": {"sisa": sisa}
-                })
+                raise AppError(
+                    "PAYMENT_EXCEEDS_BALANCE",
+                    "Nominal melebihi sisa piutang",
+                    422,
+                    {"sisa": sisa},
+                )
                 
             if request.nominal <= 0:
-                raise HTTPException(status_code=422, detail={"code": "VALIDATION_ERROR", "message": "Nominal harus > 0"})
+                raise AppError("VALIDATION_ERROR", "Nominal harus > 0", 422)
                 
             tipe = "PELUNASAN" if request.nominal == sisa else "CICILAN"
             

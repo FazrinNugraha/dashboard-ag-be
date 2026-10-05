@@ -4,8 +4,13 @@ from app.core.dependencies import get_snapshot_cache
 from app.domain.snapshot import SnapshotCache
 from app.services.report_service import ReportService
 from app.core.config import get_settings
+from app.core.security import get_current_admin
 
-router = APIRouter(prefix="/reports", tags=["Reports"])
+router = APIRouter(
+    prefix="/reports",
+    tags=["Reports"],
+    dependencies=[Depends(get_current_admin)],
+)
 
 @router.get("/export")
 async def export_report(

@@ -12,10 +12,11 @@ def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__, "env": get_settings().ENV}
 
 from app.core.dependencies import get_snapshot_cache
+from app.core.security import get_current_admin
 from app.domain.snapshot import SnapshotCache
 from fastapi import Depends
 
-@router.post("/sync")
+@router.post("/sync", dependencies=[Depends(get_current_admin)])
 async def sync_data(cache: SnapshotCache = Depends(get_snapshot_cache)):
     """Force refresh the snapshot cache from Google Sheets."""
     await cache.force_refresh()

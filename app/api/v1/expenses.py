@@ -7,7 +7,7 @@ import asyncio
 
 router = APIRouter(prefix="/expenses", tags=["Expenses"])
 
-@router.get("")
+@router.get("", dependencies=[Depends(get_current_admin)])
 async def get_expenses(
     month: str = Query(None, description="Filter by YYYY-MM"),
     page: int = 1,

@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, date
-from fastapi import HTTPException
+from app.core.errors import AppError
 from app.domain.snapshot import SnapshotCache
 from app.repositories.sheets_repository import GoogleSheetsRepository
 from app.schemas.domain import Expense
@@ -26,7 +26,7 @@ class ExpenseService:
 
     async def create_expense(self, request: ExpenseCreateRequest, username: str) -> dict:
         if request.nominal <= 0:
-            raise HTTPException(status_code=422, detail={"code": "VALIDATION_ERROR", "message": "Nominal harus > 0"})
+            raise AppError("VALIDATION_ERROR", "Nominal harus > 0", 422)
             
         async with self.write_lock:
             _, _, expenses = await self.cache.get_data()

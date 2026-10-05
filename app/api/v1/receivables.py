@@ -1,9 +1,14 @@
 from fastapi import APIRouter, Depends
 from app.core.dependencies import get_snapshot_cache
+from app.core.security import get_current_admin
 from app.domain.snapshot import SnapshotCache
 from datetime import date
 
-router = APIRouter(prefix="/receivables", tags=["Receivables"])
+router = APIRouter(
+    prefix="/receivables",
+    tags=["Receivables"],
+    dependencies=[Depends(get_current_admin)],
+)
 
 @router.get("")
 async def get_receivables(
