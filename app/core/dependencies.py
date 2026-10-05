@@ -27,6 +27,8 @@ def get_write_lock() -> asyncio.Lock:
     return _write_lock
 
 def get_repository() -> GoogleSheetsRepository:
+    # Pastikan cache (dan repository) sudah diinisialisasi sebelum dipakai.
+    get_snapshot_cache()
     return _repository
 
 def get_snapshot_cache() -> SnapshotCache:

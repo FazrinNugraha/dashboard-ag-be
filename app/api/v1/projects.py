@@ -12,8 +12,8 @@ router = APIRouter(prefix="/projects", tags=["Projects"])
 async def get_projects(
     month: str = Query(None, description="Filter by YYYY-MM"),
     q: str = Query(None, description="Search by client name"),
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     cache: SnapshotCache = Depends(get_snapshot_cache)
 ):
     projects, _, _ = await cache.get_data()

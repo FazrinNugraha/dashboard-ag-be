@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ENV: Literal["development", "production", "test"] = "development"
     API_PREFIX: str = "/api/v1"
     CORS_ORIGINS: str = "http://localhost:5173"
+    TIMEZONE: str = "Asia/Jakarta"
 
     # Sesi / Auth
     JWT_SECRET: str = Field(min_length=32)

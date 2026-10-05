@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Optional, Tuple, List
+from app.core.clock import now_local
 from app.schemas.domain import Project, Payment, Expense
 from app.repositories.sheets_repository import SheetsRepositoryProtocol
 
@@ -17,7 +18,7 @@ class SnapshotCache:
         self._refreshing = False
 
     async def get_data(self) -> Tuple[List[Project], List[Payment], List[Expense]]:
-        now = datetime.now()
+        now = now_local()
         
         # If no cache at all, we must wait and fetch synchronously
         if self._cache is None or self._last_loaded_at is None:
@@ -52,7 +53,7 @@ class SnapshotCache:
         projects, payments, expenses = self._cache
         age = None
         if self._last_loaded_at is not None:
-            age = round((datetime.now() - self._last_loaded_at).total_seconds(), 1)
+            age = round((now_local() - self._last_loaded_at).total_seconds(), 1)
         rows = {}
         if hasattr(self.repository, "last_read_stats"):
             rows = self.repository.last_read_stats()
@@ -84,7 +85,7 @@ class SnapshotCache:
                 payments + ([payment] if payment is not None else []),
                 expenses,
             )
-            self._last_loaded_at = datetime.now()
+            self._last_loaded_at = now_local()
 
     async def append_payment(self, payment: Payment) -> None:
         """Tambahkan satu pembayaran ke snapshot tanpa membaca ulang Sheets."""
@@ -94,7 +95,7 @@ class SnapshotCache:
                 return
             projects, payments, expenses = self._cache
             self._cache = (projects, payments + [payment], expenses)
-            self._last_loaded_at = datetime.now()
+            self._last_loaded_at = now_local()
 
     async def append_expense(self, expense: Expense) -> None:
         """Tambahkan satu pengeluaran ke snapshot tanpa membaca ulang Sheets."""
@@ -104,7 +105,7 @@ class SnapshotCache:
                 return
             projects, payments, expenses = self._cache
             self._cache = (projects, payments, expenses + [expense])
-            self._last_loaded_at = datetime.now()
+            self._last_loaded_at = now_local()
 
     async def _refresh_cache_background(self):
         # Single-flight check
@@ -125,7 +126,7 @@ class SnapshotCache:
         try:
             projects, payments, expenses = await self.repository.read_all()
             self._cache = (projects, payments, expenses)
-            self._last_loaded_at = datetime.now()
+            self._last_loaded_at = now_local()
             logger.info(f"Snapshot refreshed. {len(projects)} projects, {len(payments)} payments, {len(expenses)} expenses.")
         except Exception as e:
             logger.error(f"Failed to refresh cache: {e}")

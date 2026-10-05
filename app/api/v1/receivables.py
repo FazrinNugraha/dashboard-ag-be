@@ -3,7 +3,7 @@ from app.core.dependencies import get_snapshot_cache
 from app.core.security import get_current_admin
 from app.domain.snapshot import SnapshotCache
 from app.domain.metrics import compute_receivables
-from datetime import date
+from app.core.clock import today_local
 
 router = APIRouter(
     prefix="/receivables",
@@ -17,7 +17,7 @@ async def get_receivables(
 ):
     projects, payments, _ = await cache.get_data()
 
-    today = date.today()
+    today = today_local()
     receivables = []
     for proj, total_dibayar, sisa in compute_receivables(projects, payments):
         umur = (today - proj.tanggal).days

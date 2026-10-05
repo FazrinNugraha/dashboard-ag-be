@@ -163,11 +163,6 @@ class GoogleSheetsRepository:
     def last_read_stats(self) -> dict:
         return self._read_stats
 
-    async def _get_worksheet(self, title: str):
-        client = await self.agcm.authorize()
-        sh = await client.open_by_key(self.spreadsheet_id)
-        return await sh.worksheet(title)
-
     async def read_all(self) -> tuple[List[Project], List[Payment], List[Expense]]:
         client = await self.agcm.authorize()
         sh = await client.open_by_key(self.spreadsheet_id)

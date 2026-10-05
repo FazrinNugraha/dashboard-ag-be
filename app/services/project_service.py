@@ -1,5 +1,5 @@
 import asyncio
-from datetime import date
+from app.core.clock import today_local
 from app.core.errors import AppError
 from app.domain.snapshot import SnapshotCache
 from app.repositories.sheets_repository import GoogleSheetsRepository
@@ -114,7 +114,7 @@ class ProjectService:
             tipe = "PELUNASAN" if request.nominal == sisa else "CICILAN"
             
             # Generate id_bayar yang dijamin belum terpakai
-            today = date.today()
+            today = today_local()
             prefix = f"PAY-{today.strftime('%y%m')}-"
             new_id_bayar = next_sequential_id(prefix, {p.id_bayar for p in payments})
             bulan_filter = today.strftime("%Y-%m")

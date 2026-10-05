@@ -1,7 +1,10 @@
+import logging
 from typing import Dict, Any
 from app.domain.snapshot import SnapshotCache
 from app.domain.metrics import calculate_kpi, get_trend, get_expense_breakdown
-from datetime import datetime
+from app.core.clock import now_local
+
+logger = logging.getLogger(__name__)
 
 class DashboardService:
     def __init__(self, cache: SnapshotCache):
@@ -48,16 +51,16 @@ class DashboardService:
                 round((laba_delta / prev_laba * 100), 1) if prev_laba > 0 else None
             )
                 
-        except Exception:
-            # If prev month logic fails (e.g. malformed string), ignore deltas
-            pass
+        except Exception as e:
+            # Bulan lalu tidak bisa dihitung (mis. format bulan salah); delta dilewati.
+            logger.warning("Gagal menghitung delta bulan sebelumnya untuk %s: %s", month, e)
             
         trend = get_trend(projects, payments, expenses, month)
         expense_breakdown = get_expense_breakdown(expenses, month)
         
         return {
             "month": month,
-            "generated_at": datetime.now().isoformat(),
+            "generated_at": now_local().isoformat(),
             "all_time": {
                 "omzet": all_time_omzet,
                 "jumlah_proyek": len(projects)
