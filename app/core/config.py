@@ -38,6 +38,9 @@ class Settings(BaseSettings):
 
     # Google Sheets (dipakai pada fase berikutnya)
     GOOGLE_SERVICE_ACCOUNT_FILE: str = ""
+    # Alternatif untuk platform tanpa filesystem (mis. Render): isi JSON service
+    # account lengkap sebagai string environment variable.
+    GOOGLE_SERVICE_ACCOUNT_JSON: str = ""
     SPREADSHEET_ID: str = ""
     SPREADSHEET_URL: str = ""
     GEMINI_API_KEY: str = ""

@@ -1,22 +1,40 @@
+import json
+import logging
+
 import gspread_asyncio
 from google.oauth2.service_account import Credentials
 from app.core.config import get_settings
 from app.repositories.sheets_repository import GoogleSheetsRepository
 from app.domain.snapshot import SnapshotCache
 
+logger = logging.getLogger(__name__)
+
 # Instantiate globals
 _agcm = None
 _repository = None
 _snapshot_cache = None
 
+_SHEETS_SCOPES = [
+    'https://spreadsheets.google.com/feeds',
+    'https://www.googleapis.com/auth/drive',
+]
+
+
 def get_creds():
     settings = get_settings()
+    # Prioritas: kredensial dari environment variable (deploy tanpa filesystem),
+    # lalu fallback ke file service account (development lokal).
+    if settings.GOOGLE_SERVICE_ACCOUNT_JSON:
+        try:
+            info = json.loads(settings.GOOGLE_SERVICE_ACCOUNT_JSON)
+        except json.JSONDecodeError as e:
+            logger.error("GOOGLE_SERVICE_ACCOUNT_JSON bukan JSON yang valid: %s", e)
+            raise
+        return Credentials.from_service_account_info(info, scopes=_SHEETS_SCOPES)
+
     creds = Credentials.from_service_account_file(
         settings.GOOGLE_SERVICE_ACCOUNT_FILE,
-        scopes=[
-            'https://spreadsheets.google.com/feeds',
-            'https://www.googleapis.com/auth/drive'
-        ]
+        scopes=_SHEETS_SCOPES,
     )
     return creds
 
