@@ -51,6 +51,11 @@ def create_app() -> FastAPI:
         return response
 
     register_error_handlers(app)
+    
+    @app.get("/health", tags=["Health"])
+    def health_check():
+        return {"status": "ok"}
+
     app.include_router(api_router, prefix=settings.API_PREFIX)
     return app
 
