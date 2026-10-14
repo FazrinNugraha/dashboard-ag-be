@@ -4,6 +4,7 @@ from app.core.dependencies import get_snapshot_cache
 from app.core.errors import AppError
 from app.domain.snapshot import SnapshotCache
 from app.services.report_service import ReportService
+from app.services.report_pdf import period_label
 from app.core.config import get_settings
 from app.core.security import get_current_admin
 
@@ -54,14 +55,22 @@ async def export_report(
     kpi, projects, expenses, receivables = await service.get_report_data(period, value)
 
     if format == "xlsx":
-        content = service.generate_excel(kpi, projects, expenses, receivables)
+        content = service.generate_excel(
+            kpi, projects, expenses, receivables,
+            period_label=period_label(period, value),
+            project_expenses=await service.get_project_expense_totals(),
+        )
         headers = {
             "Content-Disposition": f"attachment; filename=Laporan_Agungjaya_{value}.xlsx"
         }
         return Response(content=content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
 
     title = f"Laporan Keuangan Agungjaya Aluminium - {value}"
-    content = service.generate_pdf(title, kpi, projects, expenses, receivables)
+    content = service.generate_pdf(
+        title, kpi, projects, expenses, receivables,
+        period_label=period_label(period, value),
+        project_expenses=await service.get_project_expense_totals(),
+    )
     headers = {
         "Content-Disposition": f"attachment; filename=Laporan_Agungjaya_{value}.pdf"
     }
