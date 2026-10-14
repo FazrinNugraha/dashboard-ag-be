@@ -34,7 +34,7 @@ TABS = {
     ],
     "PENGELUARAN": [
         "id_pengeluaran", "tanggal", "kategori", "keterangan", "nominal",
-        "bulan_filter", "dibuat_oleh",
+        "bulan_filter", "dibuat_oleh", "id_proyek",
     ],
     "REKAP_DASHBOARD": [
         "Bulan", "Omzet", "Kas Masuk", "Piutang", "Pengeluaran", "Laba Bersih",

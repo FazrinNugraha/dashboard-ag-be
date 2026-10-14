@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 # Penulisan tidak idempotent: hanya retry status yang pasti belum diproses.
 WRITE_RETRY_STATUSES = {429, 503}
 
+# appendCells hanya boleh menulis NILAI sel (termasuk formula), bukan format.
+# Dengan "*" format sel baru ikut ditimpa kosong, sehingga format angka/warna
+# dari scripts/style_sheet.py hilang pada baris yang ditambahkan aplikasi.
+_APPEND_FIELDS = "userEnteredValue"
+
 
 def _write_with_retry(factory):
     return call_with_retry(
@@ -85,6 +90,7 @@ def _expense_row(expense: Expense) -> list:
         _cell(expense.nominal),
         _cell(expense.bulan_filter),
         _cell(expense.dibuat_oleh),
+        _cell(expense.id_proyek),  # Kolom H: kosong = pengeluaran umum
     ]
 
 
@@ -168,7 +174,7 @@ class GoogleSheetsRepository:
         sh = await client.open_by_key(self.spreadsheet_id)
         
         # We can use batch_get to get multiple ranges at once to save API calls
-        ranges = ["PEMASUKAN_PROYEK!A2:M", "PEMBAYARAN!A2:G", "PENGELUARAN!A2:G"]
+        ranges = ["PEMASUKAN_PROYEK!A2:M", "PEMBAYARAN!A2:G", "PENGELUARAN!A2:H"]
         
         try:
             values = await call_with_retry(lambda: sh.values_batch_get(ranges))
@@ -205,10 +211,11 @@ class GoogleSheetsRepository:
             "PEMBAYARAN", stats,
         )
         expenses = _parse_rows(
-            values, 2, 7,
+            values, 2, 8,
             lambda r: Expense(
                 id_pengeluaran=r[0], tanggal=r[1], kategori=r[2], keterangan=r[3],
                 nominal=parse_int(r[4]), bulan_filter=r[5], dibuat_oleh=r[6],
+                id_proyek=str(r[7]).strip(),
             ),
             "PENGELUARAN", stats,
         )
@@ -231,7 +238,7 @@ class GoogleSheetsRepository:
             {
                 "appendCells": {
                     "sheetId": ws_proyek.id,
-                    "fields": "*",
+                    "fields": _APPEND_FIELDS,
                     "rows": [{"values": _project_row(project)}],
                 }
             }
@@ -243,7 +250,7 @@ class GoogleSheetsRepository:
                 {
                     "appendCells": {
                         "sheetId": ws_bayar.id,
-                        "fields": "*",
+                        "fields": _APPEND_FIELDS,
                         "rows": [{"values": _payment_row(dp_payment)}],
                     }
                 }
@@ -274,7 +281,7 @@ class GoogleSheetsRepository:
                             {
                                 "appendCells": {
                                     "sheetId": ws.id,
-                                    "fields": "*",
+                                    "fields": _APPEND_FIELDS,
                                     "rows": [{"values": _payment_row(payment)}],
                                 }
                             }
@@ -299,7 +306,7 @@ class GoogleSheetsRepository:
                             {
                                 "appendCells": {
                                     "sheetId": ws.id,
-                                    "fields": "*",
+                                    "fields": _APPEND_FIELDS,
                                     "rows": [{"values": _expense_row(expense)}],
                                 }
                             }

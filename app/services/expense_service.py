@@ -6,13 +6,15 @@ from app.repositories.sheets_repository import GoogleSheetsRepository
 from app.schemas.domain import Expense
 from app.services.ids import next_sequential_id
 from pydantic import BaseModel
-from typing import Literal
+from typing import Literal, Optional
 
 class ExpenseCreateRequest(BaseModel):
     tanggal: date
     kategori: Literal["BAHAN_BAKU", "AKSESORIS", "UPAH", "OPERASIONAL", "LAINNYA"]
     keterangan: str
     nominal: int
+    # Opsional: nomor invoice proyek. Kosong/None = pengeluaran umum.
+    id_proyek: Optional[str] = None
 
 class ExpenseService:
     def __init__(
@@ -32,8 +34,13 @@ class ExpenseService:
         async with self.write_lock:
             # Pastikan snapshot segar agar ID tidak dihitung dari data basi.
             await self.cache.force_refresh()
-            _, _, expenses = await self.cache.get_data()
-            
+            projects, _, expenses = await self.cache.get_data()
+
+            # Normalisasi: spasi/kosong dianggap pengeluaran umum.
+            id_proyek = (request.id_proyek or "").strip()
+            if id_proyek and not any(p.id_proyek == id_proyek for p in projects):
+                raise AppError("PROJECT_NOT_FOUND", "Proyek tidak ditemukan", 404)
+
             # Generate id_pengeluaran (OUT-YYMM-NNN) yang dijamin belum terpakai
             prefix = f"OUT-{request.tanggal.strftime('%y%m')}-"
             new_id = next_sequential_id(prefix, {e.id_pengeluaran for e in expenses})
@@ -46,7 +53,8 @@ class ExpenseService:
                 keterangan=request.keterangan,
                 nominal=request.nominal,
                 bulan_filter=bulan_filter,
-                dibuat_oleh=username
+                dibuat_oleh=username,
+                id_proyek=id_proyek,
             )
             
             await self.repository.write_expense(expense)

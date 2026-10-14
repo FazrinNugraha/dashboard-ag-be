@@ -12,6 +12,26 @@ def total_paid_by_project(payments: List[Payment]) -> Dict[str, int]:
     return totals
 
 
+def total_expense_by_project(expenses: List[Expense]) -> Dict[str, int]:
+    """Jumlah pengeluaran per id_proyek. Pengeluaran umum (tanpa proyek) diabaikan."""
+    totals: Dict[str, int] = defaultdict(int)
+    for e in expenses:
+        if e.id_proyek:
+            totals[e.id_proyek] += e.nominal
+    return totals
+
+
+def project_profit(nilai_proyek: int, total_pengeluaran: int) -> Dict[str, Any]:
+    """Laba bersih satu proyek = Nilai Proyek - Pengeluaran proyek.
+
+    Berbasis nilai kontrak (potensi laba), bukan kas, supaya untung/rugi proyek
+    terlihat sejak DP. `margin_pct` = None bila nilai proyek 0.
+    """
+    laba = nilai_proyek - total_pengeluaran
+    margin = round(laba / nilai_proyek * 100, 1) if nilai_proyek > 0 else None
+    return {"total_pengeluaran": total_pengeluaran, "laba_bersih": laba, "margin_pct": margin}
+
+
 def compute_receivables(
     projects: List[Project],
     payments: List[Payment],

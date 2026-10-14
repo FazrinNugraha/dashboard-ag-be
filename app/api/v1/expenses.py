@@ -10,6 +10,7 @@ router = APIRouter(prefix="/expenses", tags=["Expenses"])
 @router.get("", dependencies=[Depends(get_current_admin)])
 async def get_expenses(
     month: str = Query(None, description="Filter by YYYY-MM"),
+    id_proyek: str = Query(None, description="Filter pengeluaran milik satu proyek"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     cache: SnapshotCache = Depends(get_snapshot_cache)
@@ -20,9 +21,11 @@ async def get_expenses(
     filtered = expenses
     if month:
         filtered = [e for e in filtered if e.bulan_filter == month]
+    if id_proyek:
+        filtered = [e for e in filtered if e.id_proyek == id_proyek]
         
-    # Sort descending by date
-    filtered.sort(key=lambda x: x.tanggal, reverse=True)
+    # Sort descending by date (sorted() agar list cache tidak termutasi)
+    filtered = sorted(filtered, key=lambda x: x.tanggal, reverse=True)
     
     start = (page - 1) * page_size
     end = start + page_size

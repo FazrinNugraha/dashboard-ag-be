@@ -37,3 +37,6 @@ class Expense(BaseModel):
     nominal: int
     bulan_filter: str
     dibuat_oleh: str
+    # Nomor invoice proyek pemilik pengeluaran. Kosong = pengeluaran umum
+    # (air, listrik, wifi, dll). Baris lama di Sheets tanpa kolom ini otomatis kosong.
+    id_proyek: str = ""

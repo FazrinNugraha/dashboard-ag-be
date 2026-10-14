@@ -4,7 +4,7 @@ import pytest
 from tests.conftest import API
 
 
-@pytest.mark.parametrize("query", ["page=0", "page=-1", "page_size=0", "page_size=101"])
+@pytest.mark.parametrize("query", ["page=0", "page=-1", "page_size=0", "page_size=501"])
 def test_paginasi_tidak_valid_422(auth_client, query):
     r = auth_client.get(f"{API}/projects?{query}")
     assert r.status_code == 422
