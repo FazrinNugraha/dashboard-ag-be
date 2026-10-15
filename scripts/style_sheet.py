@@ -1,11 +1,13 @@
-"""Mempercantik tampilan spreadsheet DB_Agungjaya (idempotent, hanya tampilan).
+"""Mempercantik tampilan spreadsheet DATABASE_AGUNGJAYA (idempotent, hanya tampilan).
 
 Yang dilakukan (tidak pernah mengubah ISI sel / data):
-  - Header berwarna (biru tua, teks putih tebal), baris 1 dibekukan
-  - Baris belang (zebra) agar mudah dibaca
+  - Header berwarna biru corporate elegan (#1D4ED8), teks putih tebal, baris 1 dibekukan
+  - Garis kotak-kotak sel (borders) jelas & rapi di setiap baris dan kolom
+  - Gridlines aktif (hideGridlines = False) agar tampilan spreadsheet hidup dan jelas
+  - Baris belang soft blue (#F0F7FF) agar data nyaman dan mudah dibaca
   - Format angka uang "Rp 1.000.000" + rata kanan
   - Warna otomatis (conditional formatting) untuk status, tipe, kategori, piutang
-  - Filter di header, lebar kolom pas, gridline disembunyikan, warna tab
+  - Filter di header, lebar kolom pas, warna tab bernuansa biru serasi
 
 Aman dijalankan berulang: aturan lama (banding & conditional format) dihapus
 dulu lalu dipasang ulang, sehingga tidak menumpuk.
@@ -13,8 +15,6 @@ dulu lalu dipasang ulang, sehingga tidak menumpuk.
 Pakai:
     python scripts/style_sheet.py            # DRY-RUN: hanya menampilkan rencana
     python scripts/style_sheet.py --apply    # benar-benar menerapkan ke spreadsheet
-
-SARAN: duplikasi spreadsheet dulu (File > Make a copy) sebagai cadangan.
 """
 import os
 import sys
@@ -32,7 +32,7 @@ SCOPES = [
 ]
 
 # ---------------------------------------------------------------------------
-# Palet warna (biru profesional). Ubah di sini bila ingin ganti gaya.
+# Palet warna (biru corporate soft & clean)
 # ---------------------------------------------------------------------------
 def rgb(hex_color: str) -> dict:
     """Ubah '#RRGGBB' menjadi format warna Sheets API (0.0 - 1.0)."""
@@ -41,18 +41,20 @@ def rgb(hex_color: str) -> dict:
     return {"red": r, "green": g, "blue": b}
 
 
-HEADER_BG = rgb("#1E3A8A")   # biru tua
-HEADER_FG = rgb("#FFFFFF")   # putih
-BAND_1 = rgb("#FFFFFF")      # baris ganjil
-BAND_2 = rgb("#EFF6FF")      # baris genap (biru sangat muda)
+HEADER_BG = rgb("#1D4ED8")    # Biru Corporate Soft & Clean
+HEADER_FG = rgb("#FFFFFF")    # Putih
+BAND_1 = rgb("#FFFFFF")       # Baris ganjil
+BAND_2 = rgb("#F0F7FF")       # Baris genap (Soft Ice Blue)
+BORDER_COLOR = rgb("#CBD5E1") # Garis kotak-kotak rapi & jelas
 
 # Pasangan (warna latar, warna teks) untuk conditional formatting
 GREEN = (rgb("#DCFCE7"), rgb("#166534"))
 YELLOW = (rgb("#FEF3C7"), rgb("#92400E"))
 BLUE = (rgb("#DBEAFE"), rgb("#1E40AF"))
+INDIGO = (rgb("#E0E7FF"), rgb("#3730A3"))
 ROSE = (rgb("#FFE4E6"), rgb("#9F1239"))
 TEAL = (rgb("#CCFBF1"), rgb("#115E59"))
-SLATE = (rgb("#E2E8F0"), rgb("#334155"))
+SLATE = (rgb("#F1F5F9"), rgb("#475569"))
 ORANGE_TEXT = rgb("#C2410C")
 
 MONEY_PATTERN = '"Rp "#,##0'
@@ -62,28 +64,26 @@ MONEY_PATTERN = '"Rp "#,##0'
 # ---------------------------------------------------------------------------
 TABS = {
     "PEMASUKAN_PROYEK": {
-        "tab_color": "#1E3A8A",
+        "tab_color": "#1D4ED8",
         "widths": [130, 100, 170, 200, 260, 120, 110, 130, 90, 100, 130, 130, 110],
         "money": [5, 6, 7, 10, 11],  # subtotal, diskon, nilai, dibayar, sisa
-        # (kolom, nilai teks, warna)
         "text_rules": [(12, "LUNAS", GREEN), (12, "DP", YELLOW)],
-        # sisa_piutang > 0 -> teks oranye tebal (masih ada tagihan)
         "positive_alert": [11],
     },
     "PEMBAYARAN": {
-        "tab_color": "#16A34A",
+        "tab_color": "#2563EB",
         "widths": [130, 130, 100, 130, 120, 90, 110],
         "money": [3],
         "text_rules": [(4, "DP", YELLOW), (4, "CICILAN", BLUE), (4, "PELUNASAN", GREEN)],
         "positive_alert": [],
     },
     "PENGELUARAN": {
-        "tab_color": "#E11D48",
+        "tab_color": "#0284C7",
         "widths": [130, 100, 130, 280, 130, 90, 110, 140],
         "money": [4],
         "text_rules": [
             (2, "BAHAN_BAKU", BLUE),
-            (2, "AKSESORIS", TEAL),
+            (2, "AKSESORIS", INDIGO),
             (2, "UPAH", ROSE),
             (2, "OPERASIONAL", YELLOW),
             (2, "LAINNYA", SLATE),
@@ -91,7 +91,7 @@ TABS = {
         "positive_alert": [],
     },
     "REKAP_DASHBOARD": {
-        "tab_color": "#64748B",
+        "tab_color": "#0EA5E9",
         "widths": [140, 140, 140, 140, 140, 140],
         "money": [1, 2, 3, 4, 5],
         "text_rules": [],
@@ -131,19 +131,19 @@ def style_requests(sheet_id: int, rows: int, cfg: dict) -> list:
     ncols = len(cfg["widths"])
     requests = []
 
-    # 1. Warna tab + bekukan baris 1 + sembunyikan gridline
+    # 1. Warna tab + bekukan baris 1 + tampilkan gridline
     requests.append({
         "updateSheetProperties": {
             "properties": {
                 "sheetId": sheet_id,
                 "tabColorStyle": {"rgbColor": rgb(cfg["tab_color"])},
-                "gridProperties": {"frozenRowCount": 1, "hideGridlines": True},
+                "gridProperties": {"frozenRowCount": 1, "hideGridlines": False},
             },
             "fields": "tabColorStyle,gridProperties.frozenRowCount,gridProperties.hideGridlines",
         }
     })
 
-    # 2. Header: latar biru tua, teks putih tebal, rata tengah
+    # 2. Header: latar biru corporate soft & clean, teks putih tebal, rata tengah
     requests.append({
         "repeatCell": {
             "range": grid(sheet_id, 1, 0, ncols),
@@ -164,7 +164,25 @@ def style_requests(sheet_id: int, rows: int, cfg: dict) -> list:
         }
     })
 
-    # 3. Isi tabel: rata tengah vertikal
+    # 3. Garis kotak-kotak sel (Borders) jelas & rapi di setiap baris dan kolom
+    border_solid = {
+        "style": "SOLID",
+        "width": 1,
+        "color": BORDER_COLOR,
+    }
+    requests.append({
+        "updateBorders": {
+            "range": grid(sheet_id, rows, 0, ncols),
+            "top": border_solid,
+            "bottom": border_solid,
+            "left": border_solid,
+            "right": border_solid,
+            "innerHorizontal": border_solid,
+            "innerVertical": border_solid,
+        }
+    })
+
+    # 4. Isi tabel: rata tengah vertikal
     requests.append({
         "repeatCell": {
             "range": grid(sheet_id, rows, 0, ncols, row_start=1),
@@ -173,8 +191,7 @@ def style_requests(sheet_id: int, rows: int, cfg: dict) -> list:
         }
     })
 
-    # 4. Baris belang. Memakai bandedRange (sheet-level) sehingga baris baru
-    #    yang ditambahkan aplikasi otomatis ikut berwarna.
+    # 5. Baris belang soft blue (bandedRange)
     requests.append({
         "addBanding": {
             "bandedRange": {
@@ -188,7 +205,7 @@ def style_requests(sheet_id: int, rows: int, cfg: dict) -> list:
         }
     })
 
-    # 5. Kolom uang: format Rupiah + rata kanan
+    # 6. Kolom uang: format Rupiah + rata kanan
     for col in cfg["money"]:
         requests.append({
             "repeatCell": {
@@ -201,7 +218,7 @@ def style_requests(sheet_id: int, rows: int, cfg: dict) -> list:
             }
         })
 
-    # 6. Lebar kolom
+    # 7. Lebar kolom
     for col, width in enumerate(cfg["widths"]):
         requests.append({
             "updateDimensionProperties": {
@@ -212,10 +229,10 @@ def style_requests(sheet_id: int, rows: int, cfg: dict) -> list:
             }
         })
 
-    # 7. Filter di baris header
+    # 8. Filter di baris header
     requests.append({"setBasicFilter": {"filter": {"range": grid(sheet_id, rows, 0, ncols)}}})
 
-    # 8. Warna otomatis berdasarkan teks (status / tipe / kategori)
+    # 9. Warna otomatis berdasarkan teks (status / tipe / kategori)
     for col, text, (bg, fg) in cfg["text_rules"]:
         requests.append({
             "addConditionalFormatRule": {
@@ -231,7 +248,7 @@ def style_requests(sheet_id: int, rows: int, cfg: dict) -> list:
             }
         })
 
-    # 9. Angka > 0 (mis. sisa piutang) -> teks oranye tebal sebagai pengingat
+    # 10. Angka > 0 (mis. sisa piutang) -> teks oranye tebal sebagai pengingat
     for col in cfg["positive_alert"]:
         requests.append({
             "addConditionalFormatRule": {
@@ -292,7 +309,7 @@ def main() -> None:
         return
 
     sh.batch_update({"requests": requests})
-    print("Selesai. Tampilan spreadsheet sudah dirapikan.")
+    print("Selesai. Tampilan spreadsheet sudah dirapikan dengan tema soft blue dan garis kotak-kotak jelas.")
 
 
 if __name__ == "__main__":
