@@ -82,16 +82,15 @@ def test_excel_struktur_dan_kop():
 
     # Cek kop surat di sheet Ringkasan KPI
     ws1 = wb["Ringkasan KPI"]
-    assert ws1.cell(1, 1).value == COMPANY["name"]
-    assert ws1.cell(2, 1).value == COMPANY["tagline"]
-    assert ws1.cell(3, 1).value == COMPANY["address"]
-    assert "Periode: Oktober 2026" in str(ws1.cell(6, 1).value)
+    assert ws1.cell(1, 1).value == "LAPORAN RINGKASAN KEUANGAN"
+    assert ws1.cell(2, 1).value == COMPANY["name"]
+    assert "Periode: Oktober 2026" in str(ws1.cell(3, 1).value)
 
     # Cek nilai laba bersih di sheet Ringkasan KPI
-    # Header di baris 8, data 4 baris, total di baris 13
-    assert ws1.cell(9, 1).value == "Omzet (nilai invoice terbit)"
-    assert ws1.cell(9, 2).value == 21_000_000
-    assert ws1.cell(9, 2).number_format == MONEY_FMT
+    # Header di baris 5, section di baris 6, data omzet di baris 7
+    assert ws1.cell(7, 1).value == "Omzet (nilai invoice terbit)"
+    assert ws1.cell(7, 2).value == 21_000_000
+    assert ws1.cell(7, 2).number_format == MONEY_FMT
 
 
 def test_excel_proyek_laba_per_proyek():
@@ -109,8 +108,8 @@ def test_excel_proyek_laba_per_proyek():
     wb = load_workbook(io.BytesIO(content))
     ws = wb["Proyek"]
 
-    # Baris data proyek pertama di baris 9 (setelah header baris 8)
-    row = 9
+    # Baris data proyek pertama di baris 6 (setelah header baris 5)
+    row = 6
     assert ws.cell(row, 1).value == "INV-2610-001"
     assert ws.cell(row, 3).value == "BPK YUSUF"
     assert ws.cell(row, 5).value == 21_000_000   # Nilai proyek

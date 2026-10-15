@@ -1,12 +1,12 @@
-"""Pembuat Excel (XLSX) laporan keuangan dengan tampilan profesional.
+"""Pembuat Excel (XLSX) laporan keuangan dengan tampilan clean & soft blue.
 
-Gaya mengikuti laporan PDF: kop perusahaan di atas tiap sheet, header navy,
-baris belang, format Rupiah, baris total, filter, dan pengaturan cetak.
-Identitas perusahaan & palet warna dipakai bersama dari `report_pdf` agar
-PDF dan Excel selalu seragam.
-
-Nilai ditulis sebagai angka/tanggal asli (bukan teks) sehingga tetap bisa
-dijumlah, difilter, dan diurutkan di Excel.
+Desain mengadopsi format laporan posisi keuangan modern:
+- Kop laporan ringkas 3 baris di atas (Judul, Nama Perusahaan, Periode)
+- Header tabel biru corporate elegan (Calibri, teks putih bold)
+- Banner pembatas kategori berwarna biru muda lembut (soft blue)
+- Baris data putih bersih dengan gridlines aktif dan garis kotak-kotak rapi
+- Baris total dengan garis bawah ganda (accounting underline) dan highlight biru lembut
+- Status badge LUNAS (hijau soft) dan DP (kuning amber soft)
 """
 import io
 from datetime import date
@@ -20,26 +20,33 @@ from openpyxl.worksheet.worksheet import Worksheet
 from app.schemas.domain import Expense, Project
 from app.services.report_pdf import CATEGORY_LABELS, COMPANY, format_date
 
-# --- Palet (hex tanpa '#', format openpyxl) ---------------------------------
-NAVY = "1E3A5F"
-BAND = "DCE6F1"
-TOTAL_BG = "EEF2F7"
-GREEN_BG, GREEN_FG = "DCFCE7", "166534"
-YELLOW_BG, YELLOW_FG = "FEF3C7", "92400E"
+# --- Palet Warna (Format openpyxl ARGB hex tanpa '#') ------------------------
+PRIMARY_BLUE = "1D4ED8"        # Biru Corporate Solid (Header Tabel Utama)
+SECTION_BLUE = "DBEAFE"        # Biru Muda Lembut (Banner Kategori)
+SECTION_FG = "1E40AF"          # Biru Tua Gelap untuk teks banner kategori
+TOTAL_BG = "DBEAFE"            # Biru lembut untuk baris total / subtotal
+STATUS_LUNAS_BG = "DCFCE7"
+STATUS_LUNAS_FG = "166534"
+STATUS_DP_BG = "FEF3C7"
+STATUS_DP_FG = "92400E"
 
 # Format angka Excel. Laba: hijau bila untung, merah bila rugi.
-MONEY_FMT = '"Rp" #,##0'
-PROFIT_FMT = '[Color10]"Rp" #,##0;[Red]-"Rp" #,##0'
+MONEY_FMT = '"Rp"#,##0'
+PROFIT_FMT = '[Color10]"Rp"#,##0;[Red]-"Rp"#,##0'
 PCT_FMT = "0.0%"
 DATE_FMT = "dd/mm/yyyy"
 
-# Baris tetap di tiap sheet: kop (1-3), judul (5-6), header tabel (8)
-TITLE_ROW = 5
-PERIOD_ROW = 6
-HEADER_ROW = 8
+FONT_FAMILY = "Calibri"
+HEADER_ROW = 5
 
 _THIN = Side(style="thin", color="000000")
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
+_TOTAL_BORDER = Border(
+    left=_THIN,
+    right=_THIN,
+    top=_THIN,
+    bottom=Side(style="double", color="000000"),
+)
 
 
 def _fill(color: str) -> PatternFill:
@@ -47,23 +54,19 @@ def _fill(color: str) -> PatternFill:
 
 
 def _letterhead(ws: Worksheet, ncols: int, title: str, label: str) -> None:
-    """Kop perusahaan (merge selebar tabel) + garis navy + judul sheet & periode."""
-    def merged(row: int, text: str, font: Font, height: float | None = None):
+    """Kop laporan ringkas & bersih (3 baris): Judul Laporan, Nama Perusahaan, Periode."""
+    def write_centered(row: int, text: str, font: Font, height: float = 20):
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=ncols)
         cell = ws.cell(row=row, column=1, value=text)
         cell.font = font
         cell.alignment = Alignment(horizontal="center", vertical="center")
-        if height:
-            ws.row_dimensions[row].height = height
+        ws.row_dimensions[row].height = height
 
-    merged(1, COMPANY["name"], Font(name="Times New Roman", size=18, bold=True, color=NAVY), 28)
-    merged(2, COMPANY["tagline"], Font(name="Times New Roman", size=10, italic=True))
-    merged(3, COMPANY["address"], Font(name="Times New Roman", size=10))
-    # Garis navy tebal di bawah kop
-    for col in range(1, ncols + 1):
-        ws.cell(row=3, column=col).border = Border(bottom=Side(style="thick", color=NAVY))
-    merged(TITLE_ROW, title, Font(name="Times New Roman", size=13, bold=True), 22)
-    merged(PERIOD_ROW, f"Periode: {label}" if label else "", Font(name="Times New Roman", size=10))
+    write_centered(1, title, Font(name=FONT_FAMILY, size=13, bold=True, color=PRIMARY_BLUE), height=24)
+    write_centered(2, COMPANY["name"], Font(name=FONT_FAMILY, size=11, bold=True, color="1E293B"), height=18)
+    if label:
+        write_centered(3, f"Periode: {label}", Font(name=FONT_FAMILY, size=10, color="64748B"), height=16)
+    ws.row_dimensions[4].height = 8  # Spacer row
 
 
 def _table(
@@ -78,29 +81,25 @@ def _table(
     center: tuple = (),
     total: Optional[list] = None,
 ) -> int:
-    """Tulis tabel mulai HEADER_ROW. Kolom 1-based. Mengembalikan baris terakhir.
-
-    money/profit/pct/dates : kolom yang diberi format angka tertentu.
-    center                 : kolom rata tengah (mis. No, Status).
-    total                  : baris total (tebal) di akhir tabel.
-    """
+    """Tulis tabel mulai HEADER_ROW. Kolom 1-based. Mengembalikan baris terakhir."""
     ncols = len(headers)
 
-    # Header navy
+    # Header Biru Corporate
     for c, h in enumerate(headers, 1):
         cell = ws.cell(row=HEADER_ROW, column=c, value=h)
-        cell.font = Font(name="Times New Roman", size=10, bold=True, color="FFFFFF")
-        cell.fill = _fill(NAVY)
+        cell.font = Font(name=FONT_FAMILY, size=10, bold=True, color="FFFFFF")
+        cell.fill = _fill(PRIMARY_BLUE)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.border = _BORDER
     ws.row_dimensions[HEADER_ROW].height = 24
 
-    def style_cell(cell, c: int, bold: bool = False):
-        cell.font = Font(name="Times New Roman", size=10, bold=bold)
-        cell.border = _BORDER
+    def style_cell(cell, c: int, bold: bool = False, is_total: bool = False):
+        cell.font = Font(name=FONT_FAMILY, size=10, bold=bold)
+        cell.border = _TOTAL_BORDER if is_total else _BORDER
         cell.alignment = Alignment(
             horizontal="center" if c in center else "right" if c in money + profit + pct else "left",
-            vertical="center", wrap_text=True,
+            vertical="center",
+            wrap_text=True,
         )
         if c in money:
             cell.number_format = MONEY_FMT
@@ -111,33 +110,34 @@ def _table(
         elif c in dates:
             cell.number_format = DATE_FMT
 
-    # Data (baris genap diberi warna belang)
+    # Baris data putih bersih
     for r, values in enumerate(rows):
         row_idx = HEADER_ROW + 1 + r
+        ws.row_dimensions[row_idx].height = 20
         for c, v in enumerate(values, 1):
             cell = ws.cell(row=row_idx, column=c, value=v)
             style_cell(cell, c)
-            if r % 2 == 1:
-                cell.fill = _fill(BAND)
+            cell.fill = _fill("FFFFFF")
 
     last = HEADER_ROW + len(rows)
 
     # Baris total
     if total:
         last += 1
+        ws.row_dimensions[last].height = 22
         for c, v in enumerate(total, 1):
             cell = ws.cell(row=last, column=c, value=v)
-            style_cell(cell, c, bold=True)
+            style_cell(cell, c, bold=True, is_total=True)
             cell.fill = _fill(TOTAL_BG)
 
-    # Lebar kolom, bekukan header, filter, dan pengaturan cetak
+    # Lebar kolom, bekukan header, filter, dan pengaturan cetak/tampilan
     for c, w in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(c)].width = w
     ws.freeze_panes = ws.cell(row=HEADER_ROW + 1, column=1)
     if rows:
         data_end = HEADER_ROW + len(rows)
         ws.auto_filter.ref = f"A{HEADER_ROW}:{get_column_letter(ncols)}{data_end}"
-    ws.sheet_view.showGridLines = False
+    ws.sheet_view.showGridLines = True
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
@@ -150,18 +150,20 @@ def _footer_note(ws: Worksheet, ncols: int, last_row: int, printed_on: date) -> 
     """Catatan kecil di bawah tabel: tanggal cetak."""
     ws.merge_cells(start_row=last_row + 2, start_column=1, end_row=last_row + 2, end_column=ncols)
     cell = ws.cell(row=last_row + 2, column=1, value=f"Dicetak pada {format_date(printed_on)}")
-    cell.font = Font(name="Times New Roman", size=9, italic=True, color="475569")
+    cell.font = Font(name=FONT_FAMILY, size=9, italic=True, color="64748B")
     cell.alignment = Alignment(horizontal="right")
 
 
 def _status_fill(ws: Worksheet, col: int, first_row: int, last_row: int) -> None:
-    """Warnai sel status: LUNAS hijau, DP kuning."""
+    """Warnai sel status: LUNAS hijau soft, DP kuning soft."""
     for r in range(first_row, last_row + 1):
         cell = ws.cell(row=r, column=col)
         if cell.value == "LUNAS":
-            cell.fill, cell.font = _fill(GREEN_BG), Font(name="Times New Roman", size=10, bold=True, color=GREEN_FG)
+            cell.fill = _fill(STATUS_LUNAS_BG)
+            cell.font = Font(name=FONT_FAMILY, size=10, bold=True, color=STATUS_LUNAS_FG)
         elif cell.value == "DP":
-            cell.fill, cell.font = _fill(YELLOW_BG), Font(name="Times New Roman", size=10, bold=True, color=YELLOW_FG)
+            cell.fill = _fill(STATUS_DP_BG)
+            cell.font = Font(name=FONT_FAMILY, size=10, bold=True, color=STATUS_DP_FG)
 
 
 def build_report_excel(
@@ -173,11 +175,7 @@ def build_report_excel(
     printed_on: date,
     project_expenses: Optional[Dict[str, int]] = None,
 ) -> bytes:
-    """Bangun workbook laporan (4 sheet).
-
-    project_expenses : total pengeluaran SEMUA waktu per id_proyek untuk laba
-                       per proyek. Bila None dihitung dari `expenses` periode.
-    """
+    """Bangun workbook laporan (4 sheet) dengan tema clean & soft blue."""
     if project_expenses is None:
         project_expenses = {}
         for e in expenses:
@@ -186,33 +184,105 @@ def build_report_excel(
 
     wb = Workbook()
 
-    # 1. Ringkasan KPI -------------------------------------------------------
+    # 1. Ringkasan KPI & Posisi Keuangan -------------------------------------
     ws = wb.active
     ws.title = "Ringkasan KPI"
-    ws.sheet_properties.tabColor = NAVY
+    ws.sheet_properties.tabColor = PRIMARY_BLUE
     margin = kpi["laba_bersih"].get("margin_pct")
-    _letterhead(ws, 2, "LAPORAN KEUANGAN - RINGKASAN", label)
-    last = _table(
-        ws, ["Keterangan", "Nilai"],
-        [
-            ["Omzet (nilai invoice terbit)", kpi["omzet"]["value"]],
-            ["Kas Masuk (pembayaran diterima)", kpi["kas_masuk"]["value"]],
-            ["Total Pengeluaran", kpi["pengeluaran"]["value"]],
-            ["Margin Laba", margin / 100 if margin is not None else "-"],
-        ],
-        [44, 24], money=(2,),
-        total=["Laba Bersih (Kas Masuk - Pengeluaran)", kpi["laba_bersih"]["value"]],
+    _letterhead(ws, 2, "LAPORAN RINGKASAN KEUANGAN", label)
+
+    # Header
+    for c, h in enumerate(["Komponen Keuangan", "Nominal"], 1):
+        cell = ws.cell(row=HEADER_ROW, column=c, value=h)
+        cell.font = Font(name=FONT_FAMILY, size=10, bold=True, color="FFFFFF")
+        cell.fill = _fill(PRIMARY_BLUE)
+        cell.alignment = Alignment(horizontal="center" if c == 2 else "left", vertical="center")
+        cell.border = _BORDER
+    ws.row_dimensions[HEADER_ROW].height = 24
+
+    curr_row = HEADER_ROW + 1
+
+    def add_section_banner(title: str):
+        nonlocal curr_row
+        ws.merge_cells(start_row=curr_row, start_column=1, end_row=curr_row, end_column=2)
+        cell = ws.cell(row=curr_row, column=1, value=title)
+        cell.font = Font(name=FONT_FAMILY, size=10, bold=True, color=SECTION_FG)
+        cell.fill = _fill(SECTION_BLUE)
+        cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        ws.cell(row=curr_row, column=2).fill = _fill(SECTION_BLUE)
+        for col in (1, 2):
+            ws.cell(row=curr_row, column=col).border = _BORDER
+        ws.row_dimensions[curr_row].height = 22
+        curr_row += 1
+
+    def add_data_row(label_text: str, value, num_fmt: str = MONEY_FMT, bold: bool = False, is_subtotal: bool = False):
+        nonlocal curr_row
+        c1 = ws.cell(row=curr_row, column=1, value=label_text)
+        c2 = ws.cell(row=curr_row, column=2, value=value)
+        c1.font = Font(name=FONT_FAMILY, size=10, bold=bold)
+        c2.font = Font(name=FONT_FAMILY, size=10, bold=bold)
+        c1.alignment = Alignment(horizontal="left", vertical="center", indent=2 if not is_subtotal else 1)
+        c2.alignment = Alignment(horizontal="right", vertical="center")
+        c2.number_format = num_fmt
+        bg = TOTAL_BG if is_subtotal else "FFFFFF"
+        c1.fill = _fill(bg)
+        c2.fill = _fill(bg)
+        border = _TOTAL_BORDER if is_subtotal else _BORDER
+        c1.border = border
+        c2.border = border
+        ws.row_dimensions[curr_row].height = 20
+        curr_row += 1
+
+    # Section 1: ARUS KAS & PENDAPATAN
+    add_section_banner("ARUS KAS & PENDAPATAN")
+    add_data_row("Omzet (nilai invoice terbit)", kpi["omzet"]["value"])
+    add_data_row("Kas Masuk (pembayaran diterima)", kpi["kas_masuk"]["value"])
+
+    # Section 2: PENGELUARAN (BEBAN)
+    add_section_banner("PENGELUARAN (BEBAN OPERASIONAL & PROYEK)")
+    category_totals = {k: 0 for k in CATEGORY_LABELS}
+    for e in expenses:
+        cat = e.kategori if e.kategori in category_totals else "LAINNYA"
+        category_totals[cat] += e.nominal
+
+    for cat_key, cat_label in CATEGORY_LABELS.items():
+        amt = category_totals.get(cat_key, 0)
+        if amt > 0:
+            add_data_row(f"{cat_label}", amt)
+
+    add_data_row("Total Pengeluaran", kpi["pengeluaran"]["value"], is_subtotal=True, bold=True)
+
+    # Section 3: HASIL BERSIH
+    add_section_banner("HASIL BERSIH")
+    add_data_row(
+        "Laba Bersih (Kas Masuk - Pengeluaran)",
+        kpi["laba_bersih"]["value"],
+        num_fmt=PROFIT_FMT,
+        bold=True,
+        is_subtotal=True,
     )
-    ws.cell(row=last, column=2).number_format = PROFIT_FMT
-    # Baris margin berformat persen (baris data ke-4)
-    margin_cell = ws.cell(row=HEADER_ROW + 4, column=2)
     if margin is not None:
-        margin_cell.number_format = PCT_FMT
-    _footer_note(ws, 2, last, printed_on)
+        add_data_row("Margin Laba Bersih", margin / 100, num_fmt=PCT_FMT)
+
+    # Section 4: PIUTANG
+    if receivables:
+        add_section_banner("PIUTANG BERJALAN")
+        total_piutang = sum(r["sisa"] for r in receivables)
+        add_data_row("Total Sisa Tagihan (Piutang)", total_piutang, is_subtotal=True, bold=True)
+
+    ws.column_dimensions["A"].width = 46
+    ws.column_dimensions["B"].width = 26
+    ws.freeze_panes = ws.cell(row=HEADER_ROW + 1, column=1)
+    ws.sheet_view.showGridLines = True
+    ws.page_setup.orientation = "portrait"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    _footer_note(ws, 2, curr_row - 1, printed_on)
 
     # 2. Proyek (dengan laba per proyek) ------------------------------------
     ws = wb.create_sheet("Proyek")
-    ws.sheet_properties.tabColor = "16A34A"
+    ws.sheet_properties.tabColor = "1D4ED8"
     _letterhead(ws, 9, "LAPORAN PROYEK DAN LABA PER PROYEK", label)
     rows, t_nilai, t_keluar = [], 0, 0
     for p in sorted(projects, key=lambda x: x.tanggal):
@@ -227,16 +297,16 @@ def build_report_excel(
     last = _table(
         ws, ["No. Invoice", "Tanggal", "Klien", "Pekerjaan", "Nilai Proyek",
              "Pengeluaran", "Laba Bersih", "Margin", "Status"],
-        rows, [16, 13, 22, 34, 18, 18, 18, 10, 11],
-        money=(5, 6), profit=(7,), pct=(8,), dates=(2,), center=(9,),
-        total=["", "", "", "Total", t_nilai, t_keluar, t_nilai - t_keluar, "", ""] if rows else None,
+        rows, [16, 13, 22, 34, 18, 18, 18, 11, 12],
+        money=(5, 6), profit=(7,), pct=(8,), dates=(2,), center=(1, 2, 9),
+        total=["", "", "", "TOTAL", t_nilai, t_keluar, t_nilai - t_keluar, "", ""] if rows else None,
     )
     _status_fill(ws, 9, HEADER_ROW + 1, HEADER_ROW + len(rows))
     _footer_note(ws, 9, last, printed_on)
 
     # 3. Pengeluaran ---------------------------------------------------------
     ws = wb.create_sheet("Pengeluaran")
-    ws.sheet_properties.tabColor = "E11D48"
+    ws.sheet_properties.tabColor = "0284C7"
     _letterhead(ws, 6, "LAPORAN PENGELUARAN", label)
     rows = [
         [e.id_pengeluaran, e.tanggal, CATEGORY_LABELS.get(e.kategori, e.kategori),
@@ -244,21 +314,21 @@ def build_report_excel(
         for e in sorted(expenses, key=lambda x: x.tanggal)
     ]
     last = _table(
-        ws, ["ID", "Tanggal", "Kategori", "Keterangan", "Proyek", "Nominal"],
-        rows, [16, 13, 18, 40, 18, 18], money=(6,), dates=(2,),
-        total=["", "", "", "", "Total", sum(e.nominal for e in expenses)] if rows else None,
+        ws, ["ID Pengeluaran", "Tanggal", "Kategori", "Keterangan", "Proyek", "Nominal"],
+        rows, [16, 13, 18, 40, 18, 18], money=(6,), dates=(2,), center=(1, 2, 5),
+        total=["", "", "", "", "TOTAL PENGELUARAN", sum(e.nominal for e in expenses)] if rows else None,
     )
     _footer_note(ws, 6, last, printed_on)
 
     # 4. Piutang -------------------------------------------------------------
     ws = wb.create_sheet("Piutang")
-    ws.sheet_properties.tabColor = "D97706"
+    ws.sheet_properties.tabColor = "0EA5E9"
     _letterhead(ws, 5, "DAFTAR PIUTANG BERJALAN", label)
     rows = [[r["id"], r["tanggal"], r["klien"], r["nilai"], r["sisa"]] for r in receivables]
     last = _table(
         ws, ["No. Invoice", "Tanggal", "Klien", "Nilai Proyek", "Sisa Tagihan"],
-        rows, [16, 13, 26, 20, 20], money=(4, 5), dates=(2,),
-        total=["", "", "Total Piutang", "", sum(r["sisa"] for r in receivables)] if rows else None,
+        rows, [16, 13, 26, 20, 20], money=(4, 5), dates=(2,), center=(1, 2),
+        total=["", "", "TOTAL PIUTANG", sum(r["nilai"] for r in receivables), sum(r["sisa"] for r in receivables)] if rows else None,
     )
     _footer_note(ws, 5, last, printed_on)
 
